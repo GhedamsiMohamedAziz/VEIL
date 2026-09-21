@@ -6,7 +6,6 @@ import argparse
 import json
 import sys
 
-from veil import jobs
 from veil.db import create_organization, init_db, session_scope
 from veil.ml.detectors import registry
 from veil.ml.runner import execute_run

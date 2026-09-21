@@ -8,7 +8,6 @@ from sqlalchemy.exc import IntegrityError
 from veil.api.deps import SessionDep, UserDep, audit, fetch
 from veil.db import scoped
 from veil.ml.detectors import registry
-from veil.ml.evaluation.metrics import summarize
 from veil.ml.manufacture_eval import evaluate_production
 from veil.ml.patterns.manufacture import ProductionSpec, to_artwork
 from veil.ml.patterns.serialization import from_png, to_png

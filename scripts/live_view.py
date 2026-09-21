@@ -208,7 +208,7 @@ def main() -> int:
     print("  - move the camera proportionally closer for a smaller display.")
     print("A pattern shown smaller than a real print is not the same experiment.")
 
-    print(f"\n  b / c / k   measure baseline / control / candidate:")
+    print("\n  b / c / k   measure baseline / control / candidate:")
     print(f"              {args.countdown:.0f}s countdown -> {args.frames} frames -> auto-submit")
     print("  x           cancel the current countdown or recording")
     print("  q           quit\n")

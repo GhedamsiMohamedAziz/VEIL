@@ -16,7 +16,6 @@ the image is resampled once instead of five times.
 from __future__ import annotations
 
 import hashlib
-import itertools
 import math
 import random
 from dataclasses import asdict, dataclass, field

@@ -31,7 +31,7 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "dataset belongs to another project")
     if not registry.exists(body.detector_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"unknown detector; see GET /detectors")
+                            "unknown detector; see GET /detectors")
     detector_labels = registry.info(body.detector_id).labels
     target = body.configuration.target_label
     if detector_labels and target not in detector_labels:

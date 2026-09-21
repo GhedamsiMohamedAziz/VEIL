@@ -183,7 +183,6 @@ def main() -> int:
                             size=(96, 96), mode="area").squeeze(0)
 
     print()
-    verdict = None
     for name, subset in (("TRAIN (seen)", train), ("HELD-OUT (never seen)", test)):
         baseline = measure(subset, None)
         draws = [measure(subset, c) for c in controls]
@@ -199,7 +198,6 @@ def main() -> int:
         print(f"  vs best control {report.get('attributable_vs_best_control', 0):+.3f}   "
               f"worst p {report['significance']['worst_p_value']:.4f}")
         print(f"  -> {report['verdict']}\n")
-        verdict = report
 
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "pattern.png").write_bytes(to_png(result.pattern))

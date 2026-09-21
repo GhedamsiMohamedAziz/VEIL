@@ -26,7 +26,6 @@ subject every detector agrees is a person, which means photographs.
 from __future__ import annotations
 
 import io
-import math
 import random
 
 from PIL import Image, ImageDraw, ImageFilter

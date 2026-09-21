@@ -190,7 +190,7 @@ def test_report_carries_conditions_and_limitations(client, auth, experiment):
     assert len(payload["limitations"]) >= 3
     assert any("not generalize" in line for line in payload["limitations"])
 
-    pdf = client.get(f"{API}/reports/{report["id"]}/pdf", headers=auth)
+    pdf = client.get(f"{API}/reports/{report['id']}/pdf", headers=auth)
     assert pdf.status_code == 200
     assert pdf.content.startswith(b"%PDF-")
     # A valid header proves nothing about the contents; tests/test_report_pdf.py

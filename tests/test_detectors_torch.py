@@ -82,7 +82,7 @@ def test_gradient_strategy_is_selected_and_produces_a_printable_pattern(detector
     assert len(result.history) == 2
     assert result.pattern.shape == (3, 32, 32)
 
-    from veil.ml.patterns.constraints import PRINTABLE_PALETTE, non_printability
+    from veil.ml.patterns.constraints import non_printability
 
     assert float(non_printability(result.pattern)) < 1e-5  # quantized on export
 
