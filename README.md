@@ -66,6 +66,12 @@ cd web && npm install && npm run dev                  # http://localhost:3000
 Paste the key on **Settings** in the dashboard. Docker: `cd infrastructure &&
 docker compose up --build`.
 
+**One API process per database.** Runs execute in a worker thread of the API
+process, and at startup any run still `queued`/`running` is closed as failed
+(its worker died with the previous process). Several processes or containers
+on one database are not supported; if you must, set
+`VEIL_FAIL_ORPHANED_RUNS_ON_START=false` so they do not fail each other's runs.
+
 **Schema changes** are Alembic migrations in `veil/migrations/`. A new database
 is created at the latest schema and a versioned one is upgraded when the API
 starts. A database created *before* migrations existed is never changed on

@@ -34,7 +34,10 @@ LIMITATIONS = [
     "image-transformation pair as independent and describe the rate on the "
     "evaluated images only; with few images they say little about new ones.",
     "A pattern optimized against one detector is not expected to transfer to "
-    "detectors it was not measured against.",
+    "detectors it was not measured against. Transfer results are exploratory: "
+    "their p-values are Holm-corrected across the transfer detectors tested; "
+    "the primary detector is the hypothesis stated in advance and is not part "
+    "of that correction.",
     "The baseline-to-candidate drop includes the effect of the patch covering "
     "part of the subject. Only the control-to-candidate difference is "
     "attributable to the pattern itself; where no control arm was run, no such "
