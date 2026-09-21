@@ -30,7 +30,9 @@ LIMITATIONS = [
     "Digital results are measured on a simulated transformation distribution. "
     "Simulation is an approximation of physical capture, not a substitute for it.",
     "Detection rates are estimated from a finite sample; 95% confidence "
-    "intervals are reported alongside each rate.",
+    "intervals are reported alongside each rate. The intervals treat every "
+    "image-transformation pair as independent and describe the rate on the "
+    "evaluated images only; with few images they say little about new ones.",
     "A pattern optimized against one detector is not expected to transfer to "
     "detectors it was not measured against.",
     "The baseline-to-candidate drop includes the effect of the patch covering "

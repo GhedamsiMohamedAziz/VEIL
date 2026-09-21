@@ -91,6 +91,9 @@ def to_pdf(report: dict[str, Any]) -> bytes:
     w.heading("Results")
     w.kv("samples per condition set", results["sample_count"])
     baseline, candidate = results["baseline"], results["candidate"]
+    split = results.get("split") or {}
+    w.kv("images evaluated", f"{candidate.get('images') or 'not recorded'}"
+         + (" (held out from optimization)" if split.get("held_out") else " (NOT held out)"))
     control = results.get("control")
     spread = (control or {}).get("spread") or {}
     w.kv("baseline detection rate", _pct(baseline.get("detection_rate")))

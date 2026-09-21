@@ -50,6 +50,13 @@ def summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     lo, hi = _wilson_interval(detected, n)
     return {
         "samples": n,
+        # The interval below counts every image x transformation as independent.
+        # They are not: 1 image x 256 points is one subject seen 256 ways. It
+        # bounds the rate *on these images*; how far that carries to new ones
+        # is limited by `images`, which therefore travels with it.
+        # piggy: no between-image interval - with the 1-4 images runs have
+        # today a cluster bootstrap is degenerate. Add one when datasets reach ~10.
+        "images": len({r.get("image_id") for r in records if r.get("image_id") is not None}) or None,
         "detections": detected,
         "detection_rate": detected / n,
         "detection_rate_ci95": [lo, hi],
