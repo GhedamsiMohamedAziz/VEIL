@@ -164,3 +164,32 @@ def test_a_sku_taken_by_one_organization_is_free_for_another(client, auth, other
     assert (mine.status_code, theirs.status_code) == (201, 201)
     again = client.post(f"{API}/garments", json={**body, "pattern_id": pattern_ids[0]}, headers=auth)
     assert again.status_code == 409
+
+
+def test_experiment_numbers_are_never_reused_and_active_runs_are_unique(client, auth, red_png):
+    import pytest as _pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from veil.db import session_scope
+    from veil.models import Experiment, ExperimentRun
+
+    project_id = client.post(f"{API}/projects", json={"name": "p"}, headers=auth).json()["id"]
+    artifact = client.post(f"{API}/projects/{project_id}/artifacts",
+                           files={"file": ("a.png", red_png, "image/png")}, headers=auth).json()
+    dataset = client.post(f"{API}/datasets", json={
+        "project_id": project_id, "name": "d", "source": "synthetic, generated in tests",
+        "artifact_ids": [artifact["id"]]}, headers=auth).json()
+    body = {"project_id": project_id, "name": "e", "detector_id": "colorblob-v1",
+            "dataset_id": dataset["id"], "configuration": {"target_label": "blob"}}
+    made = [client.post(f"{API}/experiments", json=body, headers=auth).json() for _ in range(3)]
+    assert [e["number"] for e in made] == [1, 2, 3]
+    with session_scope() as session:  # experiment #2 goes away; its number must not come back
+        session.delete(session.get(Experiment, made[1]["id"]))
+    assert client.post(f"{API}/experiments", json=body, headers=auth).json()["number"] == 4
+
+    # The database itself refuses a second active run, whatever the route checked.
+    with _pytest.raises(IntegrityError), session_scope() as session:
+        organization_id = session.get(Experiment, made[0]["id"]).organization_id
+        for _ in range(2):
+            session.add(ExperimentRun(organization_id=organization_id,
+                                      experiment_id=made[0]["id"], status="queued", seed=1))

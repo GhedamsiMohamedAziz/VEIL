@@ -17,10 +17,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -128,6 +130,14 @@ class ExperimentRun(Base, TimestampMixin):
     can change the numbers."""
 
     __tablename__ = "experiment_runs"
+    # At most one active run per experiment, enforced where a check-then-insert
+    # in the route cannot be. piggy: create_all adds it to new databases only;
+    # existing ones get it with the first Alembic migration.
+    __table_args__ = (
+        Index("uq_active_run", "experiment_id", unique=True,
+              sqlite_where=text("status IN ('queued', 'running')"),
+              postgresql_where=text("status IN ('queued', 'running')")),
+    )
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
     experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
