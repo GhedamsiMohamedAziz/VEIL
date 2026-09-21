@@ -31,7 +31,12 @@ def non_printability(pattern: torch.Tensor, palette: list[tuple[float, float, fl
     the nearest reproducible ink. Zero when the pattern uses palette colours."""
     colors = torch.tensor(palette or PRINTABLE_PALETTE, device=pattern.device, dtype=pattern.dtype)
     flat = pattern.reshape(3, -1).t()  # [N,3]
-    dist = torch.cdist(flat.unsqueeze(0), colors.unsqueeze(0)).squeeze(0)  # [N,K]
+    # Direct differences, not the |a|^2+|b|^2-2ab shortcut: that form leaves
+    # rounding error which sqrt amplifies near zero (sqrt(1e-9) ~ 3e-5), and
+    # the size of it depends on the BLAS - it passed on macOS and failed on
+    # Linux CI. An on-palette pixel must score exactly 0 on every platform.
+    dist = torch.cdist(flat.unsqueeze(0), colors.unsqueeze(0),
+                       compute_mode="donot_use_mm_for_euclid_dist").squeeze(0)  # [N,K]
     return dist.min(dim=1).values.mean()
 
 

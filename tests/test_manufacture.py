@@ -64,8 +64,9 @@ def test_downsample_then_snap_never_invents_a_colour():
     produced = to_production(pattern, spec)
     allowed = torch.tensor(spec.palette)
     flat = produced.reshape(3, -1).t()
-    distance = torch.cdist(flat.unsqueeze(0), allowed.unsqueeze(0)).squeeze(0).min(dim=1).values
-    assert float(distance.max()) < 1e-5
+    distance = torch.cdist(flat.unsqueeze(0), allowed.unsqueeze(0),
+                           compute_mode="donot_use_mm_for_euclid_dist").squeeze(0).min(dim=1).values
+    assert float(distance.max()) == 0.0  # exact: snapped values are the palette's own floats
 
 
 def test_artwork_upscale_renders_stitches_as_blocks():
