@@ -56,6 +56,17 @@ def _background(draw: ImageDraw.ImageDraw, size: int, rng: random.Random) -> Non
                    fill=tuple(rng.randint(70, 120) for _ in range(3)))
 
 
+def _figure_geometry(rng: random.Random, size: int, height_fraction: float):
+    """(figure_h, head_r, cx, top_y). Shared by `person` and `torso_box` so the
+    annotation cannot drift from the drawing; call it at the same point of the
+    RNG stream in both - after the background and the palette."""
+    figure_h = size * height_fraction * rng.uniform(0.9, 1.05)
+    head_r = figure_h / 15.0
+    cx = size * rng.uniform(0.4, 0.6)
+    top_y = (size - figure_h) * rng.uniform(0.35, 0.75)
+    return figure_h, head_r, cx, top_y
+
+
 def person(
     size: int = 480,
     seed: int = 0,
@@ -68,11 +79,7 @@ def person(
     draw = ImageDraw.Draw(image)
     _background(draw, size, rng)
     colors = _body_palette(rng)
-
-    figure_h = size * height_fraction * rng.uniform(0.9, 1.05)
-    head_r = figure_h / 15.0
-    cx = size * rng.uniform(0.4, 0.6)
-    top_y = (size - figure_h) * rng.uniform(0.35, 0.75)
+    figure_h, head_r, cx, top_y = _figure_geometry(rng, size, height_fraction)
 
     head_cy = top_y + head_r
     neck_y = head_cy + head_r * 0.95
@@ -155,9 +162,10 @@ def person_png(size: int = 480, seed: int = 0) -> bytes:
 def torso_box(size: int = 480, seed: int = 0) -> tuple[float, float, float, float]:
     """Approximate ground-truth box for the figure, for annotated datasets."""
     rng = random.Random(seed)
-    figure_h = size * 0.72 * rng.uniform(0.9, 1.05)
-    head_r = figure_h / 15.0
-    cx = size * rng.uniform(0.4, 0.6)
-    top_y = (size - figure_h) * rng.uniform(0.35, 0.75)
-    half_w = head_r * 2.0
+    # Replay what person() draws first: the background and palette consume
+    # random numbers, and skipping them boxed a figure that was never drawn.
+    _background(ImageDraw.Draw(Image.new("RGB", (size, size))), size, rng)
+    _body_palette(rng)
+    figure_h, head_r, cx, top_y = _figure_geometry(rng, size, 0.72)
+    half_w = head_r * 3.2  # measured against the drawn figure: arms reach past the shoulders
     return (cx - half_w, top_y, cx + half_w, top_y + figure_h)
