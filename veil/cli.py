@@ -12,6 +12,7 @@ from veil.db import (
     alembic_config,
     create_organization,
     init_db,
+    revisions,
     schema_state,
     session_scope,
     upgrade_db,
@@ -49,17 +50,24 @@ def main(argv: list[str] | None = None) -> int:
         print("database ready")
     elif args.command == "db":
         if args.action == "status":
-            print(f"database is {schema_state()}")
-            if schema_state() != "empty":
-                alembic.current(alembic_config(), verbose=False)
-                alembic.heads(alembic_config())
+            state = schema_state()
+            current, head = revisions()
+            print(f"database is {state}")
+            if state == "legacy":
+                print(f"current: none - created before migrations; `veil db upgrade` adopts it\nhead:    {head}")
+            elif state == "versioned":
+                print(f"current: {current}\nhead:    {head}" + ("" if current == head else "   <- pending"))
         elif args.action == "revision":
             alembic.revision(alembic_config(), message=args.message, autogenerate=True)
             print("read it before committing: autogenerate cannot see unnamed constraints")
         else:
-            backup = upgrade_db()
-            print(f"backup: {backup}" if backup else "no file backup (not an SQLite file)")
-            print("database is at head")
+            if schema_state() == "versioned" and len(set(revisions())) == 1:
+                print("already at head; nothing to do")
+            else:
+                backup = upgrade_db()
+                print(f"backup: {backup}" if backup else
+                      "no backup made: not an SQLite file - this safety net is SQLite-only")
+                print("database is at head")
     elif args.command == "detectors":
         for info in registry.available():
             print(f"{info.id:28} {info.version:40} differentiable={info.differentiable}")

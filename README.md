@@ -79,7 +79,8 @@ startup (a warning says so); adopt it once, explicitly:
 
 ```bash
 .venv/bin/veil db status     # empty | versioned | legacy, and the revision
-.venv/bin/veil db upgrade    # copies an SQLite file to <name>.bak-<timestamp>, then migrates
+.venv/bin/veil db upgrade    # snapshots an SQLite file to <name>.bak-<timestamp>, then migrates;
+                             # a failed upgrade restores it. PostgreSQL: take your own dump first
 ```
 
 New migration after editing `veil/models.py`: `.venv/bin/veil db revision "what

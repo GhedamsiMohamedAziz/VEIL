@@ -24,6 +24,25 @@ def _global_sku_name() -> str:
 
 
 def upgrade() -> None:
+    # Nothing enforced "one active run per experiment" before this index, so an
+    # older database may hold several. Keep the newest, close the rest - the
+    # index could not be created otherwise. This must stay the first step: it
+    # is the only one that can fail on existing data, and it fails before any
+    # table is rebuilt.
+    op.execute("""
+        UPDATE experiment_runs
+           SET status = 'failed',
+               error = 'superseded: another run of this experiment was active when the '
+                       || 'one-active-run rule was introduced (migration 0002)'
+         WHERE status IN ('queued', 'running')
+           AND id NOT IN (
+               SELECT id FROM (
+                   SELECT id, ROW_NUMBER() OVER (
+                       PARTITION BY experiment_id ORDER BY created_at DESC, id DESC) AS newest
+                     FROM experiment_runs
+                    WHERE status IN ('queued', 'running')) AS ranked
+                WHERE newest = 1)
+    """)
     with op.batch_alter_table("experiment_runs") as batch_op:
         batch_op.create_index("uq_active_run", ["experiment_id"], unique=True,
                               sqlite_where=ACTIVE, postgresql_where=ACTIVE)
