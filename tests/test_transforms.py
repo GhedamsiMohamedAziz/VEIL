@@ -19,6 +19,16 @@ def test_grid_sampling_is_exhaustive_and_capped():
     capped = T.TransformSpec(max_samples=5).sample()
     assert len(capped) == 5
 
+    # The default grid (432 points) exceeds the cap: capping must thin it out,
+    # never drop a whole value of an axis, and stay reproducible.
+    default = T.TransformSpec()
+    sampled = default.sample()
+    assert len(sampled) == default.max_samples
+    for axis in ("rotation_deg", "scale", "perspective", "brightness", "blur_sigma",
+                 "noise_std", "deformation"):
+        assert {getattr(p, axis) for p in sampled} == set(getattr(default, axis)), axis
+    assert sampled == default.sample()
+
 
 def test_same_seed_gives_identical_parameters_and_pixels():
     spec = T.TransformSpec(mode="random", samples=8)

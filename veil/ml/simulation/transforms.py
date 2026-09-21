@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import math
+import random
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -89,13 +90,16 @@ class TransformSpec:
             list(self.perspective), list(self.brightness), list(self.contrast),
             list(self.blur_sigma), list(self.noise_std), list(self.deformation),
         ]
-        out = []
-        for combo in itertools.product(*axes):
-            rot, sc, tr, persp, bri, con, blur, noise, deform = combo
-            out.append(TransformParams(rot, sc, tr, tr, persp, bri, con, blur, noise, deform))
-            if len(out) >= self.max_samples:
-                break
-        return out
+        combos = list(itertools.product(*axes))
+        if len(combos) > self.max_samples:
+            # A fixed-seed subsample, not the first N: product() varies the last
+            # axis fastest, so truncating it drops whole values of the first
+            # axis (the default grid lost rotation=+30 entirely). A stride would
+            # alias with the axis lengths instead; a shuffle covers every axis.
+            keep = sorted(random.Random(0).sample(range(len(combos)), self.max_samples))
+            combos = [combos[i] for i in keep]
+        return [TransformParams(rot, sc, tr, tr, persp, bri, con, blur, noise, deform)
+                for rot, sc, tr, persp, bri, con, blur, noise, deform in combos]
 
     def _random(self, seed: int) -> list[TransformParams]:
         gen = torch.Generator().manual_seed(seed)
