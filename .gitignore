@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.db
+/var/
+/data/
+node_modules/
+.next/
+out/
+.pytest_cache/
+.DS_Store
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# Documentation is kept out of the repository by choice; the README carries
+# what a reader needs. The ADRs and design notes remain on disk under docs/.
+*.md
+docs/
+!README.md

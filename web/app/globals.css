@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/*
+ * VEIL surface tokens. Dark by default: the product is scientific
+ * instrumentation, and measurement UIs read better on a dark ground.
+ *
+ * The three data colours are validated across all pairs (OKLCH lightness
+ * band, chroma floor, CVD separation, normal-vision floor >= 15, >=3:1
+ * contrast against the surface). The closest pair is candidate/control at
+ * dE 8.8 protan, which is legal only because every bar is directly labelled
+ * with its value and named in the legend. Do not swap a colour without
+ * re-running scripts/validate_palette.js.
+ */
+:root {
+  --surface: #0f1115;
+  --surface-raised: #161922;
+  --border: #252a35;
+  --ink: #e8eaf0;
+  --ink-secondary: #a2a9bb;
+  --ink-muted: #6d7488;
+  --series-baseline: #4f86e8;
+  --series-control: #3f9e7a;
+  --series-candidate: #cf7f2f;
+  --good: #3fa66a;
+  --warning: #d0a215;
+}
+
+html, body { background: var(--surface); color: var(--ink); }
+body {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--series-baseline); color: #fff; }

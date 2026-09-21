@@ -1,0 +1,41 @@
+# Local stack. Postgres is here because production wants it; the default
+# VEIL_DATABASE_URL in the image is SQLite, so `docker compose up api` alone
+# also works with no database service at all.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: veil
+      POSTGRES_PASSWORD: veil
+      POSTGRES_DB: veil
+    volumes: ["db:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veil"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    environment:
+      VEIL_DATABASE_URL: postgresql+psycopg://veil:veil@db:5432/veil
+      VEIL_ARTIFACT_ROOT: /data/artifacts
+      VEIL_BOOTSTRAP_API_KEY: ${VEIL_BOOTSTRAP_API_KEY:-}
+    ports: ["8000:8000"]
+    volumes: ["artifacts:/data"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  web:
+    image: node:22-alpine
+    working_dir: /web
+    command: sh -c "npm ci && npm run dev"
+    environment:
+      NEXT_PUBLIC_VEIL_API: http://localhost:8000/api/v1
+    ports: ["3000:3000"]
+    volumes: ["../web:/web"]
+
+volumes:
+  db:
+  artifacts:

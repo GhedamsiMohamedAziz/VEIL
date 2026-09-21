@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push: {branches: [main]}
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install (CPU torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install -e ".[dev]"
+      # Cached so the slow suite does not re-download weights on every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/torch
+          key: torch-hub-${{ hashFiles('veil/ml/detectors/torchvision_detector.py') }}
+      - name: Fast suite (no model weights)
+        run: pytest -q -m "not slow"
+      - name: Full suite
+        run: pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: web}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
