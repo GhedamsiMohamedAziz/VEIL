@@ -21,7 +21,7 @@ from veil.schemas import (
 from veil.ml.detectors import registry
 from veil.ml.qualify import qualify
 from veil.ml.runner import _load_images
-from veil.storage import put_bytes, sniff_media_type
+from veil.storage import put_stream, sniff_media_type
 
 router = APIRouter(tags=["projects"])
 
@@ -58,17 +58,18 @@ async def upload_artifact(
     """
     project = fetch(session, Project, project_id, user)
     settings = get_settings()
-    data = await file.read(settings.max_upload_bytes + 1)
-    if len(data) > settings.max_upload_bytes:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            f"file exceeds {settings.max_upload_bytes} bytes")
-    if not data:
+    head = await file.read(16)
+    if not head:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty file")
-    media_type = sniff_media_type(data[:16])
+    media_type = sniff_media_type(head)
     if media_type is None or media_type not in settings.allowed_upload_types:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                             f"unsupported file content; allowed: {list(settings.allowed_upload_types)}")
-    uri, digest, size = put_bytes(user.organization_id, data)
+    await file.seek(0)
+    try:  # disk to disk with a hard ceiling; the file never sits in memory
+        uri, digest, size = put_stream(user.organization_id, file.file, settings.max_upload_bytes)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from exc
     artifact = Artifact(
         organization_id=user.organization_id, project_id=project.id, kind=kind,
         uri=uri, media_type=media_type, size_bytes=size, sha256=digest,

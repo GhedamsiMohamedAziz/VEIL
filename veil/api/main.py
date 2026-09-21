@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from veil import __version__
 from veil.api.routes import detectors, experiments, patterns, physical, projects, reports
@@ -67,6 +68,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def refuse_oversized_bodies(request: Request, call_next):
+    """The per-file limit in the upload route only runs after the multipart
+    parser has spooled the whole body to disk. Refuse on the declared length,
+    before a byte is read; a body that declares none is refused too."""
+    if request.method in ("POST", "PUT", "PATCH"):
+        declared = request.headers.get("content-length")
+        if declared is None:
+            return JSONResponse({"detail": "Content-Length required"}, status_code=411)
+        # Slack for multipart framing and the other form fields.
+        if not declared.isdigit() or int(declared) > get_settings().max_upload_bytes + 64 * 1024:
+            return JSONResponse({"detail": "request body too large"}, status_code=413)
+    return await call_next(request)
+
 
 for module in (projects, experiments, patterns, detectors, physical, reports):
     app.include_router(module.router, prefix="/api/v1")

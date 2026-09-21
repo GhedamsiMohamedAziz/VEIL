@@ -193,3 +193,18 @@ def test_experiment_numbers_are_never_reused_and_active_runs_are_unique(client, 
         for _ in range(2):
             session.add(ExperimentRun(organization_id=organization_id,
                                       experiment_id=made[0]["id"], status="queued", seed=1))
+
+
+def test_oversized_uploads_are_refused_before_and_after_the_body(client, auth, red_png, monkeypatch):
+    from veil.config import get_settings
+
+    project_id = client.post(f"{API}/projects", json={"name": "p"}, headers=auth).json()["id"]
+    url = f"{API}/projects/{project_id}/artifacts"
+    monkeypatch.setattr(get_settings(), "max_upload_bytes", len(red_png) - 1)
+    # Within the framing slack, so it reaches the route: the stream ceiling stops it.
+    assert client.post(url, files={"file": ("a.png", red_png, "image/png")},
+                       headers=auth).status_code == 413
+    # Declared far beyond the limit: refused on the header alone.
+    huge = client.post(url, content=b"x", headers={**auth, "Content-Length": str(10**12),
+                                                   "Content-Type": "multipart/form-data; boundary=b"})
+    assert huge.status_code == 413
