@@ -31,7 +31,7 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
     if not registry.exists(body.detector_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"unknown detector; see GET /detectors")
-    detector_labels = registry.get(body.detector_id, cached=False).metadata().labels
+    detector_labels = registry.info(body.detector_id).labels
     target = body.configuration.target_label
     if detector_labels and target not in detector_labels:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -40,7 +40,7 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
         if not registry.exists(transfer_id):
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 f"unknown transfer detector {transfer_id!r}; see GET /detectors")
-        transfer_labels = registry.get(transfer_id, cached=False).metadata().labels
+        transfer_labels = registry.info(transfer_id).labels
         if transfer_labels and target not in transfer_labels:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,

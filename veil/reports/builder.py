@@ -82,7 +82,7 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
     physical = list(session.scalars(
         scoped(PhysicalTest, org).where(PhysicalTest.experiment_id == experiment.id)
     ))
-    detector_info = registry.get(experiment.detector_id, cached=False).metadata().as_dict()
+    detector_info = registry.info(experiment.detector_id).as_dict()
 
     comparison = evaluation.metrics.get("comparison", {})
     # Evaluations stored before the split existed were not held out either.

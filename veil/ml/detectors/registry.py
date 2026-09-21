@@ -25,17 +25,22 @@ def available() -> list[DetectorInfo]:
     return [_FACTORIES[k]().metadata() for k in sorted(_FACTORIES)]
 
 
+def info(detector_id: str) -> DetectorInfo:
+    """A detector's metadata without loading its weights - for validation and
+    reports, which only need labels and version."""
+    if detector_id not in _FACTORIES:
+        raise KeyError(f"unknown detector: {detector_id}")
+    return _FACTORIES[detector_id]().metadata()
+
+
 def exists(detector_id: str) -> bool:
     return detector_id in _FACTORIES
 
 
-def get(detector_id: str, *, cached: bool = True) -> Detector:
+def get(detector_id: str) -> Detector:
     """Return a loaded detector. Cached because weights are expensive."""
     if detector_id not in _FACTORIES:
         raise KeyError(f"unknown detector: {detector_id}")
-    if cached and detector_id in _CACHE:
-        return _CACHE[detector_id]
-    detector = _FACTORIES[detector_id]().load()
-    if cached:
-        _CACHE[detector_id] = detector
-    return detector
+    if detector_id not in _CACHE:
+        _CACHE[detector_id] = _FACTORIES[detector_id]().load()
+    return _CACHE[detector_id]

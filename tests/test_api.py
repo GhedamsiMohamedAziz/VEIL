@@ -126,3 +126,19 @@ def test_report_before_any_run_is_a_conflict_not_a_fabrication(client, auth, red
         headers=auth).json()
     response = client.post(f"{API}/experiments/{experiment['id']}/report", headers=auth)
     assert response.status_code == 409
+
+
+def test_validation_and_catalogue_never_load_detector_weights(client, auth, monkeypatch):
+    """Labels and version are static: creating an experiment must not build a
+    ResNet per request, and the catalogue must name the weights a run records."""
+    from veil.ml.detectors import registry
+    from veil.ml.detectors.torchvision_detector import TorchvisionDetector
+
+    def refuse(self):
+        raise AssertionError("weights loaded on a metadata path")
+
+    monkeypatch.setattr(TorchvisionDetector, "load", refuse)
+    info = registry.info("fasterrcnn-mobilenet-320")
+    assert "person" in info.labels and info.version.endswith("COCO_V1")
+    listed = {d["id"]: d for d in client.get(f"{API}/detectors", headers=auth).json()}
+    assert listed["fasterrcnn-mobilenet-320"]["version"] == info.version

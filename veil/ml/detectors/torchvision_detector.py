@@ -67,7 +67,6 @@ class TorchvisionDetector(Detector):
         self.model_id = model_id
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._model = None
-        self._weights_name = ""
         self._raw: dict[str, Any] = {}  # last forward's pre-selection class scores
 
     def load(self) -> "TorchvisionDetector":
@@ -77,7 +76,6 @@ class TorchvisionDetector(Detector):
 
         fn_name, weights_enum, _ = _MODELS[self.model_id]
         weights = getattr(torchvision.models.detection, weights_enum).DEFAULT
-        self._weights_name = str(weights)
         model = getattr(torchvision.models.detection, fn_name)(weights=weights)
         self._model = model.eval().to(self.device)
         for p in self._model.parameters():
@@ -146,13 +144,16 @@ class TorchvisionDetector(Detector):
         return torch.stack(scores)
 
     def metadata(self) -> DetectorInfo:
-        _, _, notes = _MODELS[self.model_id]
+        _, weights_enum, notes = _MODELS[self.model_id]
         import torchvision
 
+        # Resolved from the enum, not from load(): the catalogue, the report and
+        # the run must all name the same weights, loaded or not.
+        weights_name = str(getattr(torchvision.models.detection, weights_enum).DEFAULT)
         return DetectorInfo(
             id=self.model_id,
             name=_MODELS[self.model_id][0],
-            version=f"torchvision-{torchvision.__version__}:{self._weights_name or 'DEFAULT'}",
+            version=f"torchvision-{torchvision.__version__}:{weights_name}",
             labels=[l for l in COCO_LABELS if l not in ("N/A", "__background__")],
             differentiable=True,
             license="BSD-3-Clause (torchvision), COCO weights",
