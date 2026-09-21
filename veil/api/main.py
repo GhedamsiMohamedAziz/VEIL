@@ -12,7 +12,7 @@ from veil import __version__
 from veil.api.routes import detectors, experiments, patterns, physical, projects, reports
 from veil.config import get_settings
 from veil.db import create_organization, init_db, session_scope
-from veil.models import Organization
+from veil.models import Experiment, ExperimentRun, Organization, utcnow
 
 DESCRIPTION = """
 A research and testing platform for measuring how computer-vision systems
@@ -38,6 +38,16 @@ async def lifespan(app: FastAPI):
                 create_organization(session, "VEIL (bootstrap)", "dev@veil.local",
                                     settings.bootstrap_api_key)
                 logging.getLogger("veil").info("bootstrap organization created")
+    # The worker is a thread of this process: at startup nothing can own a run
+    # still marked active. Left alone it would block its experiment with a 409
+    # forever, so it is closed as failed and the experiment can be run again.
+    with session_scope() as session:
+        for run in session.query(ExperimentRun).filter(ExperimentRun.status.in_(("queued", "running"))):
+            run.status, run.finished_at = "failed", utcnow()
+            run.error = "interrupted: the API process restarted before this run finished"
+            experiment = session.get(Experiment, run.experiment_id)
+            if experiment is not None and experiment.status in ("queued", "running"):
+                experiment.status = "failed"
     yield
 
 

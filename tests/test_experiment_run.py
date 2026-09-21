@@ -429,3 +429,45 @@ def test_pattern_is_evaluated_on_images_the_optimizer_never_saw(client, auth, ex
     run_to_completion(client, auth, experiment["id"])
     single = client.post(f"{API}/experiments/{experiment['id']}/report", headers=auth).json()
     assert "training score" in single["payload"]["limitations"][0]
+
+
+def test_run_progress_is_visible_to_other_sessions_while_it_runs(client, auth, experiment, monkeypatch):
+    """The polling contract: status and log are committed as the run goes, not
+    held in one transaction until it ends (which also locked SQLite)."""
+    from veil.db import session_scope
+    from veil.ml import runner
+    from veil.models import ExperimentRun
+
+    seen = {}
+    real_optimize = runner.optimize
+
+    def spying_optimize(*args, **kwargs):
+        with session_scope() as other:
+            row = other.query(ExperimentRun).one()
+            seen.update(status=row.status, log=list(row.log or []))
+        return real_optimize(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "optimize", spying_optimize)
+    assert run_to_completion(client, auth, experiment["id"])["status"] == "completed"
+    assert seen["status"] == "running"
+    assert any("baseline sweep" in line for line in seen["log"])
+
+
+def test_runs_left_active_by_a_dead_process_are_failed_at_startup(client, auth, experiment):
+    from fastapi.testclient import TestClient
+
+    from veil.api.main import app
+    from veil.db import session_scope
+    from veil.models import Experiment, ExperimentRun
+
+    with session_scope() as session:  # a run whose worker died with the old process
+        organization_id = session.get(Experiment, experiment["id"]).organization_id
+        session.add(ExperimentRun(organization_id=organization_id,
+                                  experiment_id=experiment["id"], status="running", seed=1))
+    blocked = client.post(f"{API}/experiments/{experiment['id']}/run", json={"seed": 2}, headers=auth)
+    assert blocked.status_code == 409
+
+    with TestClient(app) as restarted:
+        runs = restarted.get(f"{API}/experiments/{experiment['id']}/runs", headers=auth).json()
+        assert [r["status"] for r in runs] == ["failed"] and "interrupted" in runs[0]["error"]
+        assert run_to_completion(restarted, auth, experiment["id"])["status"] == "completed"

@@ -230,14 +230,17 @@ def execute_run(run_id: str) -> dict[str, Any]:
         run.status = "running"
         run.started_at = utcnow()
         experiment.status = "running"
-        session.flush()
+        # Commit, not flush: a flushed-only status is invisible to the client
+        # polling GET /runs/{id}, and on SQLite it holds the write lock for the
+        # whole run. The session keeps its objects (expire_on_commit=False).
+        session.commit()
 
         log: list[str] = []
 
         def note(message: str) -> None:
             log.append(f"{datetime.now(timezone.utc).isoformat()} {message}")
             run.log = list(log)
-            session.flush()
+            session.commit()  # progress is only progress if another session can read it
 
         base = {"run_id": run.id, "experiment_id": experiment.id, "project_id": experiment.project_id}
         try:
