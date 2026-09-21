@@ -18,3 +18,10 @@ tsconfig.tsbuildinfo
 *.md
 docs/
 !README.md
+
+# Photographs of people never belong in the repository.
+veil-subjects/
+subject-*.jpg
+
+# Tooling state, not source.
+.omc/

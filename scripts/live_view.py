@@ -104,6 +104,13 @@ def main() -> int:
                         help="frames in the rolling detection-rate window")
     parser.add_argument("--frames", type=int, default=60,
                         help="frames recorded per measurement")
+    parser.add_argument("--save-frames", type=Path, default=None,
+                        help="folder to save BASELINE-arm frames into, as training "
+                             "images. Only baseline: in the other arms a sheet of "
+                             "paper covers the torso the print is composited onto.")
+    parser.add_argument("--save-every", type=int, default=3,
+                        help="keep every Nth recorded frame (consecutive frames "
+                             "are near-duplicates)")
     parser.add_argument("--countdown", type=float, default=8.0,
                         help="seconds between pressing an arm key and recording, "
                              "to walk back and get into position")
@@ -185,6 +192,12 @@ def main() -> int:
     print("  x           cancel the current countdown or recording")
     print("  q           quit\n")
 
+    save_dir = args.save_frames.expanduser() if args.save_frames else None
+    if save_dir:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        print(f"baseline frames will be saved to {save_dir}")
+    session_tag, saved_count = "", 0
+
     arm = "baseline"
     rolling: deque[bool] = deque(maxlen=args.window)
     recording = False
@@ -230,9 +243,17 @@ def main() -> int:
         if countdown_until and time.time() >= countdown_until:
             countdown_until = 0.0
             recording, recorded = True, []
+            # One tag per recording: frames of one take are near-duplicates, so
+            # training must hold out whole takes, never individual frames.
+            session_tag, saved_count = time.strftime("%H%M%S"), 0
             print(f"recording {arm}…", flush=True)
 
         if frame_index % max(args.detect_every, 1) == 0:
+            if (recording and save_dir and arm == "baseline"
+                    and len(recorded) % max(args.save_every, 1) == 0):
+                saved_count += 1
+                cv2.imwrite(str(save_dir / f"rec-{session_tag}-{saved_count:03d}.jpg"),
+                            frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             tensor = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).float() / 255.0
             with torch.no_grad():
@@ -246,6 +267,9 @@ def main() -> int:
                     recording = False
                     history.append(submit())
                     recorded = []
+                    if save_dir and arm == "baseline":
+                        print(f"  saved {saved_count} frame(s) as rec-{session_tag}-*.jpg",
+                              flush=True)
 
         colour = ARM_COLOR[arm]
         for detection in detections:

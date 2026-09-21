@@ -59,6 +59,11 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=150)
     parser.add_argument("--coverage", type=float, default=0.45,
                         help="fraction of the detected box the print covers")
+    parser.add_argument("--placement", default=None, metavar="CX,CY,W,H",
+                        help="fixed print placement as fractions of the frame, e.g. "
+                             "0.5,0.82,0.22,0.30. Overrides the automatic torso "
+                             "placement, which assumes a full-body subject and lands "
+                             "on the chin in a head-and-shoulders framing.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", type=Path, default=Path("var/trained"))
     args = parser.parse_args()
@@ -81,7 +86,11 @@ def main() -> int:
             print(f"  skip  {path.name}  (no {args.label!r} at {args.threshold})")
             continue
         best = max(hits, key=lambda d: d.score)
-        placement = Placement.from_detection(best, (args.height, args.width), args.coverage)
+        if args.placement:
+            cx, cy, pw, ph = (float(v) for v in args.placement.split(","))
+            placement = Placement(cx=cx, cy=cy, width=pw, height=ph)
+        else:
+            placement = Placement.from_detection(best, (args.height, args.width), args.coverage)
         usable.append((path, image, placement))
         print(f"  ok    {path.name}  score {best.score:.3f}")
     if len(usable) < 2:
@@ -89,9 +98,30 @@ def main() -> int:
 
     # 2. Split. The held-out images are the whole point: a pattern that only
     #    works on images it was optimized against is an overfit, not a garment.
-    random.Random(args.seed).shuffle(usable)
-    n_test = max(1, round(len(usable) * args.holdout))
-    test, train = usable[:n_test], usable[n_test:]
+    #
+    #    Frames of one recording (rec-<take>-NNN.jpg) are near-duplicates, so a
+    #    frame-level split would put twins on both sides and report a held-out
+    #    score that is really a training score. Whole takes are held out.
+    def take_of(path: Path) -> str:
+        parts = path.stem.split("-")
+        return "-".join(parts[:2]) if parts[0] == "rec" and len(parts) >= 3 else path.stem
+
+    takes: dict[str, list] = {}
+    for item in usable:
+        takes.setdefault(take_of(item[0]), []).append(item)
+    names = sorted(takes)
+    random.Random(args.seed).shuffle(names)
+    if len(names) < 2:
+        sys.exit(
+            f"all {len(usable)} usable images come from ONE recording ({names[0]}).\n"
+            "Frames of a single take are near-identical, so nothing can be held out "
+            "honestly.\nRecord at least 3 baseline takes (press b three times, changing "
+            "pose or distance between them)."
+        )
+    n_test = max(1, round(len(names) * args.holdout))
+    test = [item for name in names[:n_test] for item in takes[name]]
+    train = [item for name in names[n_test:] for item in takes[name]]
+    print(f"\n{len(names)} independent take(s): hold out {names[:n_test]}")
     print(f"\ntrain on {len(train)}, hold out {len(test)}: "
           f"{', '.join(p.name for p, _, _ in test)}")
     if len(train) < 5:
