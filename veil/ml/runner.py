@@ -177,7 +177,7 @@ def evaluate_pattern(
     for draw in range(control_draws):
         control_pattern = constraints.quantize_to_palette(
             generator.initialize(pattern_size, init_method, seed=seed + 100_000 + draw)
-        )
+        ).to(images.device)
         records = sweep(detector, images, spec, target_label, pattern=control_pattern,
                         placement=placement, seed=seed, threshold=threshold,
                         image_ids=image_ids)
@@ -249,6 +249,7 @@ def execute_run(run_id: str) -> dict[str, Any]:
             note(f"loading dataset {dataset.name} v{dataset.version}")
             original_sizes: dict[str, tuple[int, int]] = {}
             images, image_ids = _load_images(session, dataset, image_size, original_sizes)
+            images = images.to(getattr(detector, "device", images.device))
             note(f"{images.shape[0]} image(s) at {image_size}px")
 
             placements = _placements_for(detector, images, target_label, threshold)

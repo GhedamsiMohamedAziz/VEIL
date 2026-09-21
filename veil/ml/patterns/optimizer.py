@@ -119,7 +119,9 @@ def optimize(
     cfg: OptimizationConfig,
     on_iteration: Callable[[int, dict[str, float]], None] | None = None,
 ) -> OptimizationResult:
-    pattern = generator.initialize(cfg.pattern_size, cfg.init_method, cfg.seed)
+    # On the images' device: a CPU pattern under a GPU detector round-trips the
+    # whole scene batch every step.
+    pattern = generator.initialize(cfg.pattern_size, cfg.init_method, cfg.seed).to(images.device)
     differentiable = bool(getattr(detector, "differentiable", False))
     strategy = "gradient" if differentiable else "evolution"
     history: list[dict[str, float]] = []
@@ -156,7 +158,7 @@ def optimize(
                 coarse = torch.randn(3, 16, 16, generator=gen)
                 mutation = torch.nn.functional.interpolate(
                     coarse.unsqueeze(0), size=current.shape[-2:], mode="bilinear", align_corners=False
-                ).squeeze(0)
+                ).squeeze(0).to(current.device)
                 candidate = (current + cfg.step_size * mutation).clamp(0, 1)
                 # Both scored on this step's transformation draw. Comparing the
                 # candidate's draw to an older one accepts whatever met the
