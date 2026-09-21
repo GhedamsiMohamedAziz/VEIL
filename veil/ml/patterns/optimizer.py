@@ -85,7 +85,7 @@ def _expected_score(
     detector: Detector,
     images: torch.Tensor,
     pattern: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     spec: T.TransformSpec,
     cfg: OptimizationConfig,
     step: int,
@@ -111,7 +111,7 @@ def _expected_score(
 def optimize(
     detector: Detector,
     images: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     spec: T.TransformSpec,
     cfg: OptimizationConfig,
     on_iteration: Callable[[int, dict[str, float]], None] | None = None,

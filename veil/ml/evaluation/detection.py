@@ -23,7 +23,7 @@ def sweep(
     spec: T.TransformSpec,
     target_label: str,
     pattern: torch.Tensor | None = None,
-    placement: Placement | None = None,
+    placement: Placement | list[Placement] | None = None,
     seed: int = 0,
     threshold: float = 0.5,
     image_ids: list[str] | None = None,

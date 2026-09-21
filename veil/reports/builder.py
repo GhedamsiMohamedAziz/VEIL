@@ -17,6 +17,12 @@ from veil.db import scoped
 from veil.ml.detectors import registry
 from veil.models import Dataset, Evaluation, Experiment, ExperimentRun, Pattern, PhysicalTest
 
+NOT_HELD_OUT = (
+    "The pattern was evaluated on the same image(s) it was optimized on: the "
+    "dataset was too small to hold any out. Every rate in this report is a "
+    "training score and says nothing about a new photograph."
+)
+
 LIMITATIONS = [
     "This report describes experimental results obtained under the specified "
     "test conditions. Results may not generalize to other models, cameras, "
@@ -79,6 +85,8 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
     detector_info = registry.get(experiment.detector_id, cached=False).metadata().as_dict()
 
     comparison = evaluation.metrics.get("comparison", {})
+    # Evaluations stored before the split existed were not held out either.
+    split = evaluation.metrics.get("split") or {"held_out": False}
     return _jsonable({
         "title": f"VEIL Experiment Report #{experiment.number:03d}",
         "experiment": {
@@ -121,6 +129,7 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
             "veil_score": evaluation.metrics.get("veil_score", {}),
             "transfer": evaluation.metrics.get("transfer", {}),
             "ground_truth": evaluation.metrics.get("ground_truth", {}),
+            "split": split,
         },
         "physical_tests": [
             {
@@ -130,5 +139,5 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
             }
             for t in physical
         ],
-        "limitations": LIMITATIONS,
+        "limitations": LIMITATIONS if split.get("held_out") else [NOT_HELD_OUT, *LIMITATIONS],
     })

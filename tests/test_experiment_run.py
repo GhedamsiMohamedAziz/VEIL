@@ -370,3 +370,60 @@ def test_only_candidate_arm_records_score_physical_robustness(client, auth, expe
     evaluation = client.get(f"{API}/experiments/{experiment['id']}/results", headers=auth).json()[0]
     assert evaluation["metrics"]["veil_score"]["physical_robustness"] == 1.0
     assert evaluation["metrics"]["physical"]["by_arm"]["candidate"]["samples"] == 1
+
+
+def test_pattern_is_evaluated_on_images_the_optimizer_never_saw(client, auth, experiment):
+    """Four scenes with the blob in four different places: the run must split
+    them, score only the held-out half, and place the print on each blob."""
+    from veil.ml.runner import split_indices
+
+    assert split_indices(1, 7) == ([0], [0], False)
+    fit, held, disjoint = split_indices(5, 7)
+    assert disjoint and not set(fit) & set(held) and sorted(fit + held) == list(range(5))
+    assert split_indices(5, 7) == (fit, held, True)
+
+    project_id = experiment["project_id"]
+    ids, centres = [], {}
+    for index, (top, left) in enumerate([(8, 8), (8, 56), (56, 8), (56, 56)]):
+        array = np.full((128, 128, 3), 120, dtype=np.uint8)
+        array[top:top + 64, left:left + 64] = (230, 20, 20)
+        buffer = io.BytesIO()
+        Image.fromarray(array, mode="RGB").save(buffer, format="PNG")
+        artifact = client.post(f"{API}/projects/{project_id}/artifacts",
+                               files={"file": (f"s{index}.png", buffer.getvalue(), "image/png")},
+                               headers=auth).json()
+        ids.append(artifact["id"])
+        centres[artifact["id"]] = ((left + 32) / 128, (top + 32) / 128)
+    dataset = client.post(f"{API}/datasets", json={
+        "project_id": project_id, "name": "four scenes", "source": "synthetic, generated in-repo",
+        "license": "CC0", "artifact_ids": ids}, headers=auth).json()
+    multi = client.post(f"{API}/experiments", json={
+        "project_id": project_id, "name": "held out", "detector_id": "colorblob-v1",
+        "dataset_id": dataset["id"], "configuration": experiment["configuration"],
+    }, headers=auth).json()
+
+    run = run_to_completion(client, auth, multi["id"])
+    assert run["status"] == "completed", run.get("error")
+    results = client.get(f"{API}/experiments/{multi['id']}/results", headers=auth).json()[0]
+    split = results["metrics"]["split"]
+    assert split["held_out"] is True
+    assert len(split["optimize"]) == 2 and len(split["evaluate"]) == 2
+    assert not set(split["optimize"]) & set(split["evaluate"])
+
+    records = results["metrics"]["records"]
+    for arm in ("baseline", "candidate"):
+        assert {r["image_id"] for r in records[arm]} == set(split["evaluate"])
+
+    pattern = client.get(f"{API}/patterns/{results['pattern_id']}", headers=auth).json()
+    placements = pattern["generation_parameters"]["placements"]
+    assert set(placements) == set(split["evaluate"])
+    for image_id, placement in placements.items():
+        cx, cy = centres[image_id]
+        assert abs(placement["cx"] - cx) < 0.05 and abs(placement["cy"] - cy) < 0.05
+
+    report = client.post(f"{API}/experiments/{multi['id']}/report", headers=auth).json()
+    assert not any("training score" in line for line in report["payload"]["limitations"])
+    # ...while the single-image experiment must say so, first.
+    run_to_completion(client, auth, experiment["id"])
+    single = client.post(f"{API}/experiments/{experiment['id']}/report", headers=auth).json()
+    assert "training score" in single["payload"]["limitations"][0]

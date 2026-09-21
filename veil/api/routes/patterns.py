@@ -118,7 +118,8 @@ def manufacture_pattern(
     threshold = float(config.get("threshold", 0.5))
     image_size = int(config.get("image_size", 320))
     transform_spec = TransformSpec.from_config(config.get("transforms"))
-    placement = Placement(**(pattern_row.generation_parameters or {}).get("placement", {}))
+    generation = pattern_row.generation_parameters or {}
+    single = Placement(**generation.get("placement", {}))
 
     evaluation = session.scalar(
         scoped(Evaluation, user.organization_id)
@@ -136,6 +137,16 @@ def manufacture_pattern(
         images, image_ids = _load_images(session, dataset, image_size)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    # Measure on the images the run evaluated on, each with its own placement:
+    # `digital_rate` came from exactly those, and a production rate over the
+    # optimizer's images would not be comparable to it.
+    evaluated = (generation.get("split") or {}).get("evaluate")
+    if evaluated:
+        keep = [i for i, image_id in enumerate(image_ids) if image_id in set(evaluated)]
+        if keep:
+            images, image_ids = images[keep], [image_ids[i] for i in keep]
+    stored = generation.get("placements") or {}
+    placement = [Placement(**stored[i]) if i in stored else single for i in image_ids]
 
     detector = registry.get(experiment.detector_id)
     result = evaluate_production(

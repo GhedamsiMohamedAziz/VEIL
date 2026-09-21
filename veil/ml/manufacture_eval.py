@@ -28,7 +28,7 @@ def evaluate_production(
     images: torch.Tensor,
     image_ids: list[str],
     pattern: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     spec: TransformSpec,
     production: ProductionSpec,
     *,
