@@ -137,7 +137,18 @@ def test_manufacture_endpoint_reports_retained_effect(client, auth):
     assert body["grid"] == {"rows": 100, "columns": 80, "units": "stitches"}
     assert 0 <= len(body["colour_usage"]) <= 4
     assert body["detection_rate"] is not None
-    assert "effect_retained" in body
+    # The ratio is only as good as the two rates it is built from: they must be
+    # the run's own, and the ratio must follow from them (None when the digital
+    # pattern had no effect to retain).
+    evaluation = client.get(f"{API}/experiments/{experiment['id']}/results", headers=auth).json()[0]
+    digital = evaluation["candidate_metrics"]["detection_rate"]
+    control = evaluation["control_metrics"]["detection_rate"]
+    assert body["digital_detection_rate"] == digital and body["control_detection_rate"] == control
+    if control - digital > 0:
+        expected = (control - body["detection_rate"]) / (control - digital)
+        assert body["effect_retained"] == pytest.approx(expected)
+    else:
+        assert body["effect_retained"] is None
 
     # The mill gets a real file, not a promise of one.
     artwork = client.get(f"{API}/artifacts/{body['artwork_artifact_id']}/download", headers=auth)
@@ -154,3 +165,29 @@ def test_manufacture_is_scoped_to_the_owning_organization(client, auth, api_key)
     response = client.post(f"{API}/patterns/deadbeef/manufacture",
                            json={"method": "knit"}, headers={"X-API-Key": other})
     assert response.status_code == 404
+
+
+def test_effect_retained_is_the_share_of_the_digital_effect_that_survives(monkeypatch):
+    from veil.ml import manufacture_eval
+    from veil.ml.patterns import generator
+    from veil.ml.simulation.renderer import Placement
+    from veil.ml.simulation.transforms import TransformSpec
+
+    def half_detected(*args, **kwargs):  # produced rate 0.5
+        return [{"detected": hit, "max_score": float(hit), "detection_count": int(hit), "boxes": [],
+                 "transform": {}, "image_id": "a", "image_index": 0, "transform_index": i}
+                for i, hit in enumerate([True, False])]
+
+    monkeypatch.setattr(manufacture_eval, "sweep", half_detected)
+
+    def retained(control_rate, digital_rate):
+        return manufacture_eval.evaluate_production(
+            None, torch.zeros(1, 3, 32, 32), ["a"], generator.initialize(16, "gray", seed=0),
+            Placement(0.5, 0.5, 0.3, 0.3), TransformSpec(), ProductionSpec(),
+            target_label="x", threshold=0.5, seed=1,
+            control_rate=control_rate, digital_rate=digital_rate)["effect_retained"]
+
+    assert retained(0.8, 0.2) == pytest.approx(0.5)   # (0.8-0.5)/(0.8-0.2)
+    assert retained(0.8, 0.5) == pytest.approx(1.0)   # manufacturing cost nothing
+    assert retained(0.5, 0.5) is None                 # no digital effect: nothing to retain
+    assert retained(None, 0.2) is None                # no control arm was run
