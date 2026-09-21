@@ -7,7 +7,7 @@ loads a user-supplied checkpoint (see docs/security.md).
 
 from __future__ import annotations
 
-from typing import Any
+import threading
 
 import torch
 
@@ -67,7 +67,10 @@ class TorchvisionDetector(Detector):
         self.model_id = model_id
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._model = None
-        self._raw: dict[str, Any] = {}  # last forward's pre-selection class scores
+        # Last forward's pre-selection scores. Thread-local: the registry hands
+        # this one instance to the run worker and to request threads alike, and
+        # a forward in one must not replace what `score` is about to read in another.
+        self._raw = threading.local()
 
     def load(self) -> "TorchvisionDetector":
         if self._model is not None:
@@ -83,30 +86,31 @@ class TorchvisionDetector(Detector):
         # Class scores before thresholding/NMS, for `score`'s fallback.
         if hasattr(model, "roi_heads"):  # Faster R-CNN: proposals are concatenated across images
             model.rpn.register_forward_hook(
-                lambda _m, _i, out: self._raw.update(counts=[len(p) for p in out[0]]))
+                lambda _m, _i, out: setattr(self._raw, "counts", [len(p) for p in out[0]]))
             model.rpn.head.register_forward_hook(  # per-level [batch, anchors, h, w] logits
-                lambda _m, _i, out: self._raw.update(objectness=out[0]))
+                lambda _m, _i, out: setattr(self._raw, "objectness", out[0]))
             model.roi_heads.box_predictor.register_forward_hook(
-                lambda _m, _i, out: self._raw.update(probs=out[0].softmax(-1)))
+                lambda _m, _i, out: setattr(self._raw, "probs", out[0].softmax(-1)))
         else:  # RetinaNet: [batch, anchors, classes] logits
             model.head.classification_head.register_forward_hook(
-                lambda _m, _i, out: self._raw.update(probs=out.sigmoid(), counts=None))
+                lambda _m, _i, out: self._raw.__dict__.update(probs=out.sigmoid(), counts=None))
         return self
 
     def _raw_confidence(self, index: int, wanted: int) -> torch.Tensor:
         """Highest pre-selection confidence for class `wanted` in image `index`."""
-        probs, counts = self._raw["probs"], self._raw["counts"]
+        probs, counts = self._raw.probs, self._raw.counts
         per_image = probs.split(counts)[index] if counts else probs[index]
         if per_image.shape[0] == 0:
             # The RPN proposed nothing at all for this image: one level further
             # back, the class-agnostic objectness is all that is left.
             return torch.stack([level[index].sigmoid().max()
-                                for level in self._raw["objectness"]]).max()
+                                for level in self._raw.objectness]).max()
         return per_image[:, wanted].max()
 
     def _forward(self, images: torch.Tensor) -> list[dict[str, torch.Tensor]]:
         self.load()
         assert self._model is not None
+        self._raw.__dict__.clear()  # or the previous forward's graph stays pinned between runs
         return self._model([img for img in images.to(self.device)])
 
     @torch.no_grad()

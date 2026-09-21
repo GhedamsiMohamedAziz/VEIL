@@ -148,8 +148,10 @@ def manufacture_pattern(
     evaluated = (generation.get("split") or {}).get("evaluate")
     if evaluated:
         keep = [i for i, image_id in enumerate(image_ids) if image_id in set(evaluated)]
-        if keep:
-            images, image_ids = images[keep], [image_ids[i] for i in keep]
+        if not keep:  # measuring on other images would give a rate comparable to nothing
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "the images this pattern was evaluated on are no longer in the dataset")
+        images, image_ids = images[keep], [image_ids[i] for i in keep]
     stored = generation.get("placements") or {}
     placement = [Placement(**stored[i]) if i in stored else single for i in image_ids]
 

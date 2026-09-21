@@ -159,13 +159,13 @@ def person_png(size: int = 480, seed: int = 0) -> bytes:
     return buffer.getvalue()
 
 
-def torso_box(size: int = 480, seed: int = 0) -> tuple[float, float, float, float]:
+def torso_box(size: int = 480, seed: int = 0, *, height_fraction: float = 0.72) -> tuple[float, float, float, float]:
     """Approximate ground-truth box for the figure, for annotated datasets."""
     rng = random.Random(seed)
     # Replay what person() draws first: the background and palette consume
     # random numbers, and skipping them boxed a figure that was never drawn.
     _background(ImageDraw.Draw(Image.new("RGB", (size, size))), size, rng)
     _body_palette(rng)
-    figure_h, head_r, cx, top_y = _figure_geometry(rng, size, 0.72)
+    figure_h, head_r, cx, top_y = _figure_geometry(rng, size, height_fraction)
     half_w = head_r * 3.2  # measured against the drawn figure: arms reach past the shoulders
     return (cx - half_w, top_y, cx + half_w, top_y + figure_h)

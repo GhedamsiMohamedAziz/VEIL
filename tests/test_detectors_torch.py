@@ -85,3 +85,18 @@ def test_gradient_strategy_is_selected_and_produces_a_printable_pattern(detector
     from veil.ml.patterns.constraints import PRINTABLE_PALETTE, non_printability
 
     assert float(non_printability(result.pattern)) < 1e-5  # quantized on export
+
+
+def test_pre_selection_scores_are_not_shared_between_threads(detector):
+    """The registry hands one detector to the run worker and to request threads.
+    A forward elsewhere must not replace what `score` is about to read."""
+    import threading
+
+    blank = torch.full((2, 3, 320, 320), 0.5)
+    expected = detector.score(blank, "person").detach()
+    detector._forward(blank)  # this thread's state now describes a 2-image batch
+    other = threading.Thread(target=lambda: detector.predict(torch.rand(1, 3, 320, 320)))
+    other.start()
+    other.join()
+    here = torch.stack([detector._raw_confidence(i, 1) for i in range(2)]).detach()
+    assert torch.allclose(here, expected)

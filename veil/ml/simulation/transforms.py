@@ -90,16 +90,24 @@ class TransformSpec:
             list(self.perspective), list(self.brightness), list(self.contrast),
             list(self.blur_sigma), list(self.noise_std), list(self.deformation),
         ]
-        combos = list(itertools.product(*axes))
-        if len(combos) > self.max_samples:
-            # A fixed-seed subsample, not the first N: product() varies the last
-            # axis fastest, so truncating it drops whole values of the first
-            # axis (the default grid lost rotation=+30 entirely). A stride would
-            # alias with the axis lengths instead; a shuffle covers every axis.
-            keep = sorted(random.Random(0).sample(range(len(combos)), self.max_samples))
-            combos = [combos[i] for i in keep]
-        return [TransformParams(rot, sc, tr, tr, persp, bri, con, blur, noise, deform)
-                for rot, sc, tr, persp, bri, con, blur, noise, deform in combos]
+        # A fixed-seed subsample, not the first N: product() varies the last
+        # axis fastest, so truncating it drops whole values of the first axis
+        # (the default grid lost rotation=+30 entirely). A stride would alias
+        # with the axis lengths instead. Indices are drawn from the size and
+        # decoded one by one: the product itself is never built, since axis
+        # lengths come from user configuration.
+        total = math.prod(len(axis) for axis in axes)
+        picks = range(total) if total <= self.max_samples else sorted(
+            random.Random(0).sample(range(total), self.max_samples))
+        out = []
+        for index in picks:
+            combo = []
+            for axis in reversed(axes):  # last axis fastest, like itertools.product
+                index, position = divmod(index, len(axis))
+                combo.append(axis[position])
+            deform, noise, blur, con, bri, persp, tr, sc, rot = combo
+            out.append(TransformParams(rot, sc, tr, tr, persp, bri, con, blur, noise, deform))
+        return out
 
     def _random(self, seed: int) -> list[TransformParams]:
         gen = torch.Generator().manual_seed(seed)

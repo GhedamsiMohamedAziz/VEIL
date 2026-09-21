@@ -75,3 +75,31 @@ def test_an_optimizer_that_cannot_improve_reports_no_improvement():
     assert torch.equal(result.pattern, start)
     assert result.summary()["improvement"] == 0.0
     assert len({round(h["loss"], 6) for h in result.history}) > 1  # the draws did vary
+
+
+def test_gradient_strategy_exports_a_pattern_that_really_lowers_the_loss():
+    """A differentiable stand-in whose confidence is the scene's mean
+    brightness: the optimizer must darken the patch, and the reported losses
+    must describe the exported (quantized) pattern on one shared draw."""
+    from veil.ml.patterns.optimizer import OptimizationConfig, optimize
+    from veil.ml.simulation.renderer import Placement
+    from veil.ml.simulation.transforms import TransformSpec
+
+    class Brightness:
+        differentiable = True
+
+        def score(self, scene, label):
+            return scene.mean(dim=(1, 2, 3))
+
+    spec = TransformSpec(rotation_deg=[-10.0, 10.0], scale=[1.0], translate=[0.0],
+                         perspective=[0.0], brightness=[0.8, 1.2], contrast=[1.0],
+                         blur_sigma=[0.0], noise_std=[0.0], deformation=[0.0])
+    cfg = OptimizationConfig(target_label="x", pattern_size=16, iterations=25, batch_transforms=2,
+                             learning_rate=0.1, tv_weight=0.0, nps_weight=0.0, seed=1)
+    result = optimize(Brightness(), torch.full((2, 3, 64, 64), 0.5),
+                      Placement(0.5, 0.5, 0.4, 0.4), spec, cfg)
+    start = constraints.quantize_to_palette(generator.initialize(16, cfg.init_method, cfg.seed))
+    assert result.strategy == "gradient" and len(result.history) == 25
+    assert float(result.pattern.mean()) < float(start.mean())
+    assert result.summary()["improvement"] > 0
+    assert float(constraints.non_printability(result.pattern)) < 1e-5

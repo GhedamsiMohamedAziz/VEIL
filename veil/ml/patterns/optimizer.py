@@ -131,26 +131,22 @@ def optimize(
     if differentiable:
         param = pattern.clone().requires_grad_(True)
         opt = torch.optim.Adam([param], lr=cfg.learning_rate)
-        best_loss = float("inf")
-        best = param.detach().clone()
         for step in range(cfg.iterations):
             opt.zero_grad()
             loss = loss_of(param, step)
-            # The loss belongs to the pattern *before* the step; snapshot that
-            # one, not the pattern the step is about to produce.
-            before = param.detach().clone()
             loss.backward()
             opt.step()
             with torch.no_grad():
                 param.clamp_(0, 1)
             value = float(loss.detach())
-            if value < best_loss:
-                best_loss, best = value, before
             record = {"iteration": step, "loss": value}
             history.append(record)
             if on_iteration:
                 on_iteration(step, record)
-        pattern = best
+        # The final iterate, not the step with the lowest loss: each step's loss
+        # is measured on its own transformation draw, so the minimum picks the
+        # easiest draw rather than the best pattern.
+        pattern = param.detach()
     else:
         gen = torch.Generator().manual_seed(cfg.seed)
         with torch.no_grad():

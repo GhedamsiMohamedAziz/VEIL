@@ -95,3 +95,10 @@ def test_annotations_are_scaled_into_the_run_frame():
     scaled = _annotations_at({"a": [{"label": "person", "box": [120, 60, 360, 480]}]},
                              {"a": (480, 480)}, 320)
     assert scaled["a"][0]["box"] == [80.0, 40.0, 240.0, 320.0]
+
+
+def test_ground_truth_says_so_when_the_sweep_has_no_unwarped_point():
+    annotations = {"img": [{"label": "person", "box": [0, 0, 10, 10]}]}
+    rotated = {**record(True, 0.9, boxes=[[0, 0, 10, 10]]), "transform": {"rotation_deg": -30.0}}
+    result = metrics.ground_truth_metrics([rotated], annotations, "person")
+    assert result["available"] is False and "labelled frame" in result["reason"]

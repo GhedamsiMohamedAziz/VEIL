@@ -86,9 +86,10 @@ def ground_truth_metrics(
     """
     tp = fp = fn = 0
     ious: list[float] = []
-    used = 0
+    used = warped = 0
     for record in records:
         if not _keeps_geometry(record.get("transform") or {}):
+            warped += 1
             continue
         gt_boxes = [
             a["box"] for a in annotations.get(record.get("image_id") or "", [])
@@ -112,7 +113,10 @@ def ground_truth_metrics(
                 fp += 1
         fn += len(remaining)
     if used == 0:
-        return {"available": False, "reason": "no ground-truth annotations for this label"}
+        return {"available": False, "reason": (
+            "every sweep point moves the subject out of its labelled frame; add an "
+            "unrotated, unscaled point to the transform grid to score ground truth"
+            if warped else "no ground-truth annotations for this label")}
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0

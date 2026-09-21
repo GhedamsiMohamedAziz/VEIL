@@ -32,7 +32,10 @@ def sniff_media_type(head: bytes) -> str | None:
             return mime
     if head.startswith(b"RIFF") and head[8:12] == b"WEBP":  # bare RIFF is also WAV/AVI
         return "image/webp"
-    if head[4:12] in (b"ftypisom", b"ftypmp42", b"ftypmp41", b"ftypavc1"):
+    # ISO base media; the brands that are MP4/QuickTime video, not JPEG 2000 or HEIF stills.
+    if head[4:8] == b"ftyp" and head[8:12] in (
+            b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1",
+            b"mp4v", b"M4V ", b"qt  ", b"dash", b"mmp4"):
         return "video/mp4"
     return None
 
