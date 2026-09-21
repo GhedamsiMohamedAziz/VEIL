@@ -23,6 +23,8 @@ class Settings(BaseSettings):
         "video/mp4",
     )
     log_level: str = "INFO"
+    # Browser origins allowed to call the API (VEIL_CORS_ORIGINS='["https://..."]').
+    cors_origins: tuple[str, ...] = ("http://localhost:3000", "http://127.0.0.1:3000")
     # Experiment workers run in-process (see ADR-005). One at a time keeps
     # GPU/CPU contention predictable on a single box.
     max_concurrent_runs: int = 1

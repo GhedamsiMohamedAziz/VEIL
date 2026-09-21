@@ -45,6 +45,7 @@ class _Writer:
         chunks = [text[i : i + width] for i in range(0, len(text), width)] or [""]
         for chunk in chunks:
             self._space(gap)
+            self.pdf.setFont(font, size)  # showPage() in _space resets the font
             self.pdf.drawString(_LEFT, self.y, chunk)
             self.y -= gap
 
@@ -102,7 +103,7 @@ def to_pdf(report: dict[str, Any]) -> bytes:
         w.kv(label, _pct(control.get("detection_rate")))
         if spread.get("draws", 0) > 1:
             w.kv("control draws (best to worst)",
-                 ", ".join(_pct(r) for r in sorted(spread["rates"])))
+                 ", ".join(_pct(r) for r in sorted(spread.get("rates", []))))
     w.kv("candidate detection rate", _pct(candidate.get("detection_rate")))
     w.kv("delta vs baseline", _pct(results["delta"].get("detection_rate")))
     if control:

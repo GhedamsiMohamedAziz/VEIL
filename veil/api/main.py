@@ -59,11 +59,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# The dashboard is a separate origin in development. Tighten this list before
-# any deployment that is not localhost.
+# The dashboard is a separate origin; set VEIL_CORS_ORIGINS for anything but localhost.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=list(get_settings().cors_origins),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

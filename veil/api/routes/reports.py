@@ -22,6 +22,8 @@ def generate_report(
 ) -> Report:
     experiment = fetch(session, Experiment, experiment_id, user)
     run = fetch(session, ExperimentRun, run_id, user) if run_id else None
+    if run is not None and run.experiment_id != experiment.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "run belongs to another experiment")
     try:
         payload = build(session, experiment, run)
     except ValueError as exc:
