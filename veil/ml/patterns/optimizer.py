@@ -74,6 +74,9 @@ class OptimizationResult:
         }
 
 
+_REPORT_STEP = 1_000_003  # seeds the reporting draw; far outside any iteration count
+
+
 def _penalties(pattern: torch.Tensor, cfg: OptimizationConfig) -> torch.Tensor:
     return (
         cfg.tv_weight * constraints.total_variation(pattern)
@@ -124,32 +127,34 @@ def optimize(
     def loss_of(p: torch.Tensor, step: int) -> torch.Tensor:
         return _expected_score(detector, images, p, placement, spec, cfg, step, differentiable) + _penalties(p, cfg)
 
+    start = pattern.clone()
     if differentiable:
         param = pattern.clone().requires_grad_(True)
         opt = torch.optim.Adam([param], lr=cfg.learning_rate)
-        initial = float(loss_of(param.detach(), 0))
-        best_loss = initial
+        best_loss = float("inf")
         best = param.detach().clone()
         for step in range(cfg.iterations):
             opt.zero_grad()
             loss = loss_of(param, step)
+            # The loss belongs to the pattern *before* the step; snapshot that
+            # one, not the pattern the step is about to produce.
+            before = param.detach().clone()
             loss.backward()
             opt.step()
             with torch.no_grad():
                 param.clamp_(0, 1)
             value = float(loss.detach())
             if value < best_loss:
-                best_loss, best = value, param.detach().clone()
+                best_loss, best = value, before
             record = {"iteration": step, "loss": value}
             history.append(record)
             if on_iteration:
                 on_iteration(step, record)
-        pattern, final = best, best_loss
+        pattern = best
     else:
         gen = torch.Generator().manual_seed(cfg.seed)
         with torch.no_grad():
             current = pattern
-            best_loss = initial = float(loss_of(current, 0))
             for step in range(cfg.iterations):
                 # Smooth mutation: pixel-level noise would not survive print.
                 coarse = torch.randn(3, 16, 16, generator=gen)
@@ -157,6 +162,10 @@ def optimize(
                     coarse.unsqueeze(0), size=current.shape[-2:], mode="bilinear", align_corners=False
                 ).squeeze(0)
                 candidate = (current + cfg.step_size * mutation).clamp(0, 1)
+                # Both scored on this step's transformation draw. Comparing the
+                # candidate's draw to an older one accepts whatever met the
+                # easiest transformations, not whatever is better.
+                best_loss = float(loss_of(current, step))
                 value = float(loss_of(candidate, step))
                 if value < best_loss:
                     best_loss, current = value, candidate
@@ -164,12 +173,18 @@ def optimize(
                 history.append(record)
                 if on_iteration:
                     on_iteration(step, record)
-            pattern, final = current, best_loss
+            pattern = current
 
+    # What gets reported is measured once, after the fact: start and result,
+    # both snapped to the palette (the snap can erase the effect, and only the
+    # snapped pattern is ever exported), on one transformation draw that no
+    # iteration used. The minimum of N noisy per-step losses would show an
+    # "improvement" for an optimizer that did nothing.
+    result = constraints.quantize_to_palette(pattern.detach())
+    with torch.no_grad():
+        initial = float(loss_of(constraints.quantize_to_palette(start), _REPORT_STEP))
+        final = float(loss_of(result, _REPORT_STEP))
     return OptimizationResult(
-        pattern=constraints.quantize_to_palette(pattern.detach()),
-        history=history,
-        strategy=strategy,
-        initial_loss=initial,
-        final_loss=final,
+        pattern=result, history=history, strategy=strategy,
+        initial_loss=initial, final_loss=final,
     )
