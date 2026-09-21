@@ -60,6 +60,15 @@ def summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _keeps_geometry(transform: dict[str, Any]) -> bool:
+    """True when the transformation left every pixel where the annotation says
+    it is. Brightness, blur and noise do; rotation, scale, shift, tilt and
+    cloth deformation move the subject away from its labelled box."""
+    return (transform.get("scale", 1.0) == 1.0 and not any(
+        transform.get(k) for k in ("rotation_deg", "translate_x", "translate_y",
+                                   "perspective", "deformation")))
+
+
 def ground_truth_metrics(
     records: Iterable[dict[str, Any]],
     annotations: dict[str, list[dict[str, Any]]],
@@ -70,11 +79,17 @@ def ground_truth_metrics(
 
     Only records whose image has annotations contribute; if the dataset is
     unlabelled the caller gets `{"available": False}` rather than a fake 0.0.
+    Geometrically transformed records are skipped: their boxes live in the
+    warped frame, and matching them to unwarped annotations measures the warp.
+    `annotations` must already be in the records' pixel frame (see
+    `runner._annotations_at`).
     """
     tp = fp = fn = 0
     ious: list[float] = []
     used = 0
     for record in records:
+        if not _keeps_geometry(record.get("transform") or {}):
+            continue
         gt_boxes = [
             a["box"] for a in annotations.get(record.get("image_id") or "", [])
             if a.get("label") == target_label

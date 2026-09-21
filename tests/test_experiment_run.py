@@ -91,7 +91,9 @@ def test_full_experiment_produces_real_measurements(client, auth, experiment):
 
     ground_truth = evaluation["metrics"]["ground_truth"]["baseline"]
     assert ground_truth["available"] is True
-    assert ground_truth["annotated_samples"] == 6
+    # 6 sweep points, but only the 2 unrotated ones share the annotation's frame.
+    assert ground_truth["annotated_samples"] == 2
+    assert ground_truth["recall"] == 1.0 and ground_truth["mean_iou"] > 0.9
 
 
 def test_control_arm_runs_and_is_attributed(client, auth, experiment):

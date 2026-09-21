@@ -58,11 +58,14 @@ def code_version() -> str:
     return f"v{__version__}"
 
 
-def _load_images(session, dataset: Dataset, size: int) -> tuple[torch.Tensor, list[str]]:
+def _load_images(
+    session, dataset: Dataset, size: int, original_sizes: dict[str, tuple[int, int]] | None = None,
+) -> tuple[torch.Tensor, list[str]]:
     """Decode the dataset's artifacts into one padded batch.
 
     Images are resized to a common square so a batch can be formed; the
-    resize factor is part of the recorded configuration.
+    resize factor is part of the recorded configuration. Pass a dict as
+    `original_sizes` to receive each image's (height, width) before the resize.
     """
     tensors, ids = [], []
     for artifact_id in dataset.artifact_ids:
@@ -72,6 +75,8 @@ def _load_images(session, dataset: Dataset, size: int) -> tuple[torch.Tensor, li
         if not artifact.media_type.startswith("image/"):
             continue  # piggy: video sweeps land in v0.2 (see docs/roadmap.md)
         tensor = image_to_tensor(read_bytes(artifact.uri), size=None)
+        if original_sizes is not None:
+            original_sizes[artifact.id] = (int(tensor.shape[-2]), int(tensor.shape[-1]))
         tensor = torch.nn.functional.interpolate(
             tensor, size=(size, size), mode="bilinear", align_corners=False
         )
@@ -80,6 +85,25 @@ def _load_images(session, dataset: Dataset, size: int) -> tuple[torch.Tensor, li
     if not tensors:
         raise ValueError("dataset contains no usable images")
     return torch.cat(tensors, dim=0), ids
+
+
+def _annotations_at(
+    annotations: dict[str, list[dict[str, Any]]],
+    original_sizes: dict[str, tuple[int, int]], size: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Annotation boxes are drawn on the original photo; detections come from
+    the `size`-square copy. Bring the boxes into that frame before matching."""
+    scaled = {}
+    for image_id, items in annotations.items():
+        if image_id not in original_sizes:
+            continue
+        height, width = original_sizes[image_id]
+        sx, sy = size / width, size / height
+        scaled[image_id] = [
+            {**a, "box": [a["box"][0] * sx, a["box"][1] * sy, a["box"][2] * sx, a["box"][3] * sy]}
+            for a in items
+        ]
+    return scaled
 
 
 def _placements_for(detector, images: torch.Tensor, target_label: str, threshold: float) -> list[Placement]:
@@ -219,7 +243,8 @@ def execute_run(run_id: str) -> dict[str, Any]:
         try:
             events.emit(events.EXPERIMENT_STARTED, **base, seed=run.seed, detector=experiment.detector_id)
             note(f"loading dataset {dataset.name} v{dataset.version}")
-            images, image_ids = _load_images(session, dataset, image_size)
+            original_sizes: dict[str, tuple[int, int]] = {}
+            images, image_ids = _load_images(session, dataset, image_size, original_sizes)
             note(f"{images.shape[0]} image(s) at {image_size}px")
 
             placements = _placements_for(detector, images, target_label, threshold)
@@ -379,7 +404,7 @@ def execute_run(run_id: str) -> dict[str, Any]:
                 note("physical tests: " + ", ".join(
                     f"{arm}={len(records)}" for arm, records in sorted(by_arm.items())))
 
-            annotations = dataset.annotations or {}
+            annotations = _annotations_at(dataset.annotations or {}, original_sizes, image_size)
             evaluation = Evaluation(
                 organization_id=run.organization_id, experiment_id=experiment.id, run_id=run.id,
                 pattern_id=pattern_row.id,
