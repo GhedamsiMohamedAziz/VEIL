@@ -131,8 +131,7 @@ class ExperimentRun(Base, TimestampMixin):
 
     __tablename__ = "experiment_runs"
     # At most one active run per experiment, enforced where a check-then-insert
-    # in the route cannot be. piggy: create_all adds it to new databases only;
-    # existing ones get it with the first Alembic migration.
+    # in the route cannot be. Existing databases get it with migration 0002.
     __table_args__ = (
         Index("uq_active_run", "experiment_id", unique=True,
               sqlite_where=text("status IN ('queued', 'running')"),
@@ -220,9 +219,8 @@ class Garment(Base, TimestampMixin):
     experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"))
     # Unique per organization, like every lookup of it. A global constraint
     # let one tenant learn which SKUs another had registered (201 vs error).
-    # piggy: databases created before this keep the global constraint until
-    # Alembic lands (README "Deliberately not built"); the route answers 409
-    # either way, never 500.
+    # Databases older than migration 0002 keep the global constraint until
+    # `veil db upgrade`; the route answers 409 either way, never 500.
     sku: Mapped[str] = mapped_column(String(64))
     batch_id: Mapped[str] = mapped_column(String(64))
     product_type: Mapped[str] = mapped_column(String(64))  # tshirt | hoodie | jacket

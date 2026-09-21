@@ -6,7 +6,16 @@ import argparse
 import json
 import sys
 
-from veil.db import create_organization, init_db, session_scope
+from alembic import command as alembic
+
+from veil.db import (
+    alembic_config,
+    create_organization,
+    init_db,
+    schema_state,
+    session_scope,
+    upgrade_db,
+)
 from veil.ml.detectors import registry
 from veil.ml.runner import execute_run
 from veil.models import Experiment, ExperimentRun
@@ -18,6 +27,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("init", help="create database tables")
     sub.add_parser("detectors", help="list registered detectors")
+    db = sub.add_parser("db", help="schema migrations")
+    db.add_argument("action", choices=["status", "upgrade", "revision"],
+                    help="status: what would change. upgrade: back up (SQLite), then migrate. "
+                         "revision: autogenerate a migration from the models")
+    db.add_argument("message", nargs="?", default="schema change")
 
     org = sub.add_parser("create-org", help="create an organization and print its API key once")
     org.add_argument("name")
@@ -33,6 +47,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         init_db()
         print("database ready")
+    elif args.command == "db":
+        if args.action == "status":
+            print(f"database is {schema_state()}")
+            if schema_state() != "empty":
+                alembic.current(alembic_config(), verbose=False)
+                alembic.heads(alembic_config())
+        elif args.action == "revision":
+            alembic.revision(alembic_config(), message=args.message, autogenerate=True)
+            print("read it before committing: autogenerate cannot see unnamed constraints")
+        else:
+            backup = upgrade_db()
+            print(f"backup: {backup}" if backup else "no file backup (not an SQLite file)")
+            print("database is at head")
     elif args.command == "detectors":
         for info in registry.available():
             print(f"{info.id:28} {info.version:40} differentiable={info.differentiable}")
