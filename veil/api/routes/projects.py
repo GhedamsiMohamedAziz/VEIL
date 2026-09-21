@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 
 from veil.api.deps import SessionDep, UserDep, audit, fetch
@@ -46,7 +48,7 @@ def get_project(project_id: str, session: SessionDep, user: UserDep) -> Project:
 @router.post("/projects/{project_id}/artifacts", response_model=ArtifactOut, status_code=201)
 async def upload_artifact(
     project_id: str, session: SessionDep, user: UserDep, file: UploadFile = File(...),
-    kind: str = Form("input"),
+    kind: Literal["input", "pattern", "report", "frame", "artwork"] = Form("input"),
 ) -> Artifact:
     """Upload an authorized test image.
 

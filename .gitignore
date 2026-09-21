@@ -22,6 +22,7 @@ docs/
 # Photographs of people never belong in the repository.
 veil-subjects/
 subject-*.jpg
+rec-*.jpg
 
 # Tooling state, not source.
 .omc/

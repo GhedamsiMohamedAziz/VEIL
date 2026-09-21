@@ -73,8 +73,9 @@ def main() -> int:
 
     folder = args.folder.expanduser()
     folder.mkdir(parents=True, exist_ok=True)
-    existing = len(list(folder.glob("subject-*.jpg")))
-    print(f"saving to {folder}  ({existing} already there)")
+    # Highest index, not a count: deleting early photos must never make new ones overwrite later ones.
+    existing = max((int(p.stem.split("-")[1]) for p in folder.glob("subject-[0-9]*.jpg")), default=0)
+    print(f"saving to {folder}  (numbering continues after {existing})")
     print("loading detector…")
     detector = registry.get(args.detector)
 

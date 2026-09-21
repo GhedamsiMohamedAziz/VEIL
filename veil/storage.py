@@ -21,7 +21,6 @@ from veil.config import get_settings
 _MAGIC = {
     b"\x89PNG\r\n\x1a\n": "image/png",
     b"\xff\xd8\xff": "image/jpeg",
-    b"RIFF": "image/webp",
 }
 
 
@@ -30,7 +29,9 @@ def sniff_media_type(head: bytes) -> str | None:
     for magic, mime in _MAGIC.items():
         if head.startswith(magic):
             return mime
-    if head[4:12] in (b"ftypisom", b"ftypmp42") or head[4:8] == b"ftyp":
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":  # bare RIFF is also WAV/AVI
+        return "image/webp"
+    if head[4:12] in (b"ftypisom", b"ftypmp42", b"ftypmp41", b"ftypavc1"):
         return "video/mp4"
     return None
 

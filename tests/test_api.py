@@ -40,6 +40,18 @@ def test_upload_rejects_unidentifiable_content(client, auth):
     assert response.status_code == 415
 
 
+def test_upload_rejects_riff_that_is_not_webp_and_unknown_kind(client, auth, red_png):
+    project_id = client.post(f"{API}/projects", json={"name": "p"}, headers=auth).json()["id"]
+    url = f"{API}/projects/{project_id}/artifacts"
+    wav = b"RIFF\x24\x00\x00\x00WAVEfmt "
+    assert client.post(url, files={"file": ("a.webp", wav, "image/webp")},
+                       headers=auth).status_code == 415
+    # `kind` ends up in a Content-Disposition header: only the known values get in.
+    injected = client.post(url, files={"file": ("a.png", red_png, "image/png")},
+                           data={"kind": 'x"; filename="evil.html'}, headers=auth)
+    assert injected.status_code == 422
+
+
 def test_upload_is_content_addressed(client, auth, red_png):
     project_id = client.post(f"{API}/projects", json={"name": "p"}, headers=auth).json()["id"]
     first = client.post(f"{API}/projects/{project_id}/artifacts",
