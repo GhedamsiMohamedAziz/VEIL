@@ -58,9 +58,10 @@ def test_score_stays_connected_when_nothing_is_detected(detector):
     stops the moment it starts working."""
     blank = torch.full((1, 3, 320, 320), 0.5, requires_grad=True)
     score = detector.score(blank, "person")
-    assert float(score.detach()) == 0.0
-    score.sum().backward()  # must not raise
-    assert blank.grad is not None
+    assert detector.predict(blank.detach(), threshold=0.05) == [[]]  # truly nothing detected
+    assert 0.0 < float(score.detach()) < 0.05  # below anything selection lets through
+    score.sum().backward()
+    assert float(blank.grad.abs().sum()) > 0  # `is not None` is true of an all-zero gradient
 
 
 def test_unknown_label_is_rejected(detector):

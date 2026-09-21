@@ -7,6 +7,8 @@ loads a user-supplied checkpoint (see docs/security.md).
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 from veil.ml.detectors.base import Detection, Detector, DetectorInfo
@@ -66,6 +68,7 @@ class TorchvisionDetector(Detector):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._model = None
         self._weights_name = ""
+        self._raw: dict[str, Any] = {}  # last forward's pre-selection class scores
 
     def load(self) -> "TorchvisionDetector":
         if self._model is not None:
@@ -79,7 +82,29 @@ class TorchvisionDetector(Detector):
         self._model = model.eval().to(self.device)
         for p in self._model.parameters():
             p.requires_grad_(False)  # we optimize the pattern, never the model
+        # Class scores before thresholding/NMS, for `score`'s fallback.
+        if hasattr(model, "roi_heads"):  # Faster R-CNN: proposals are concatenated across images
+            model.rpn.register_forward_hook(
+                lambda _m, _i, out: self._raw.update(counts=[len(p) for p in out[0]]))
+            model.rpn.head.register_forward_hook(  # per-level [batch, anchors, h, w] logits
+                lambda _m, _i, out: self._raw.update(objectness=out[0]))
+            model.roi_heads.box_predictor.register_forward_hook(
+                lambda _m, _i, out: self._raw.update(probs=out[0].softmax(-1)))
+        else:  # RetinaNet: [batch, anchors, classes] logits
+            model.head.classification_head.register_forward_hook(
+                lambda _m, _i, out: self._raw.update(probs=out.sigmoid(), counts=None))
         return self
+
+    def _raw_confidence(self, index: int, wanted: int) -> torch.Tensor:
+        """Highest pre-selection confidence for class `wanted` in image `index`."""
+        probs, counts = self._raw["probs"], self._raw["counts"]
+        per_image = probs.split(counts)[index] if counts else probs[index]
+        if per_image.shape[0] == 0:
+            # The RPN proposed nothing at all for this image: one level further
+            # back, the class-agnostic objectness is all that is left.
+            return torch.stack([level[index].sigmoid().max()
+                                for level in self._raw["objectness"]]).max()
+        return per_image[:, wanted].max()
 
     def _forward(self, images: torch.Tensor) -> list[dict[str, torch.Tensor]]:
         self.load()
@@ -111,8 +136,11 @@ class TorchvisionDetector(Detector):
         for i, result in enumerate(self._forward(images)):
             match = result["scores"][result["labels"] == wanted]
             if match.numel() == 0:
-                # Keep the graph connected so .backward() still works.
-                scores.append(images[i].sum() * 0.0)
+                # Nothing survived selection. A constant 0 here has an exactly
+                # zero gradient: the moment the pattern works, only the
+                # printability penalties pull on it and they undo the attack.
+                # Fall back to the best pre-selection confidence instead.
+                scores.append(self._raw_confidence(i, wanted))
             else:
                 scores.append(match.max())
         return torch.stack(scores)
