@@ -15,7 +15,16 @@ from veil.ml.patterns.serialization import from_png, to_png
 from veil.ml.runner import _load_images
 from veil.ml.simulation.renderer import Placement
 from veil.ml.simulation.transforms import TransformSpec
-from veil.models import Artifact, Dataset, Evaluation, Experiment, Garment, Pattern, utcnow
+from veil.models import (
+    Artifact,
+    Dataset,
+    Evaluation,
+    Experiment,
+    ExperimentRun,
+    Garment,
+    Pattern,
+    utcnow,
+)
 from veil.schemas import GarmentCreate, GarmentOut, PatternOut, ProductionRequest
 from veil.storage import put_bytes, read_bytes
 
@@ -155,10 +164,16 @@ def manufacture_pattern(
     stored = generation.get("placements") or {}
     placement = [Placement(**stored[i]) if i in stored else single for i in image_ids]
 
+    # The run's own seed: it drives the cloth deformation and the sensor noise,
+    # and `digital_rate` below was measured under it. Another seed would put
+    # noise, not manufacturing, into effect_retained.
+    run = session.get(ExperimentRun, pattern_row.run_id) if pattern_row.run_id else None
+    seed = run.seed if run is not None and run.organization_id == user.organization_id else 42
+
     detector = registry.get(experiment.detector_id)
     result = evaluate_production(
         detector, images, image_ids, pattern, placement, transform_spec, production,
-        target_label=target_label, threshold=threshold, seed=42,
+        target_label=target_label, threshold=threshold, seed=seed,
         control_rate=control_rate, digital_rate=digital_rate,
     )
 

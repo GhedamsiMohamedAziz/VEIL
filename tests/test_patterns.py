@@ -103,3 +103,29 @@ def test_gradient_strategy_exports_a_pattern_that_really_lowers_the_loss():
     assert float(result.pattern.mean()) < float(start.mean())
     assert result.summary()["improvement"] > 0
     assert float(constraints.non_printability(result.pattern)) < 1e-5
+
+
+def test_production_sweep_measures_only_colours_the_mill_can_make(monkeypatch):
+    from veil.ml import manufacture_eval
+    from veil.ml.patterns.manufacture import ProductionSpec, to_artwork
+    from veil.ml.simulation.renderer import Placement
+    from veil.ml.simulation.transforms import TransformSpec
+
+    swept = {}
+
+    def fake_sweep(detector, images, spec, label, pattern=None, **kwargs):
+        swept["pattern"] = pattern
+        return [{"detected": False, "max_score": 0.0, "detection_count": 0, "boxes": [],
+                 "transform": {}, "image_id": "a", "image_index": 0, "transform_index": 0}]
+
+    monkeypatch.setattr(manufacture_eval, "sweep", fake_sweep)
+    pattern = generator.initialize(48, "uniform_noise", seed=2)
+    production = ProductionSpec(method="knit", stitches_per_cm=4, width_cm=10, height_cm=12, max_yarns=4)
+    manufacture_eval.evaluate_production(
+        None, torch.zeros(1, 3, 64, 64), ["a"], pattern, Placement(0.5, 0.5, 0.3, 0.3),
+        TransformSpec(), production, target_label="x", threshold=0.5, seed=1)
+
+    def colours(t):
+        return {tuple(round(float(v), 4) for v in px) for px in t.reshape(3, -1).t()}
+
+    assert colours(swept["pattern"]) <= colours(to_artwork(pattern, production))

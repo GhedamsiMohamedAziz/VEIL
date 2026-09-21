@@ -78,7 +78,8 @@ def _load_images(
         if original_sizes is not None:
             original_sizes[artifact.id] = (int(tensor.shape[-2]), int(tensor.shape[-1]))
         tensor = torch.nn.functional.interpolate(
-            tensor, size=(size, size), mode="bilinear", align_corners=False
+            tensor, size=(size, size), mode="bilinear", align_corners=False,
+            antialias=True,  # a 4000px photo shrunk without it aliases more than the effect measured
         )
         tensors.append(tensor)
         ids.append(artifact.id)
