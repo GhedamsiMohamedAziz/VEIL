@@ -208,3 +208,34 @@ def test_oversized_uploads_are_refused_before_and_after_the_body(client, auth, r
     huge = client.post(url, content=b"x", headers={**auth, "Content-Length": str(10**12),
                                                    "Content-Type": "multipart/form-data; boundary=b"})
     assert huge.status_code == 413
+
+
+def test_chunked_bodies_are_accepted_and_cut_off_at_the_limit(client, auth, monkeypatch):
+    """curl -T and streamed fetches declare no length. They must work, and an
+    oversized one must get a 413 the browser can read (CORS headers on it)."""
+    from veil.config import get_settings
+
+    def chunks(total):
+        yield b'{"name": "p'
+        for _ in range(total // 1024):
+            yield b"x" * 1024
+        yield b'"}'
+
+    headers = {**auth, "Content-Type": "application/json", "Origin": "http://localhost:3000"}
+    small = client.post(f"{API}/projects", content=chunks(0), headers=headers)
+    assert small.status_code == 201
+
+    monkeypatch.setattr(get_settings(), "max_upload_bytes", 1024)
+    big = client.post(f"{API}/projects", content=chunks(200 * 1024), headers=headers)
+    assert big.status_code == 413
+    assert big.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_artifact_paths_must_look_like_artifacts():
+    from veil.storage import local_path
+
+    digest = "ab" + "0" * 62
+    assert local_path(f"file:///anywhere/org/ab/{digest}").name == digest
+    for uri in ("file:///etc/passwd", f"file:///anywhere/org/cd/{digest}"):
+        with pytest.raises(ValueError):
+            local_path(uri)

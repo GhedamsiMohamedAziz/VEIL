@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # Experiment workers run in-process (see ADR-005). One at a time keeps
     # GPU/CPU contention predictable on a single box.
     max_concurrent_runs: int = 1
+    # At startup, runs still queued/running are closed as failed: their worker
+    # thread died with the previous process. True only while ONE API process
+    # owns the database - with several workers or containers, set this to
+    # false, or each start fails the others' live runs.
+    fail_orphaned_runs_on_start: bool = True
 
 
 @lru_cache

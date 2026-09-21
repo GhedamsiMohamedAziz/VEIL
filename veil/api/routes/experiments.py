@@ -66,8 +66,9 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
             with session.begin_nested():
                 session.add(experiment)
             break
-        except IntegrityError:
-            continue
+        except IntegrityError as exc:
+            if "number" not in str(exc.orig):  # a missing dataset is not "contention"
+                raise
     else:
         raise HTTPException(status.HTTP_409_CONFLICT, "experiment numbering is contended; retry")
     audit(session, user, "experiment.create", experiment.id)

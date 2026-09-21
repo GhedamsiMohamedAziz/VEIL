@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -43,7 +43,8 @@ async def lifespan(app: FastAPI):
     # still marked active. Left alone it would block its experiment with a 409
     # forever, so it is closed as failed and the experiment can be run again.
     with session_scope() as session:
-        for run in session.query(ExperimentRun).filter(ExperimentRun.status.in_(("queued", "running"))):
+        active = ("queued", "running") if settings.fail_orphaned_runs_on_start else ()
+        for run in session.query(ExperimentRun).filter(ExperimentRun.status.in_(active)):
             run.status, run.finished_at = "failed", utcnow()
             run.error = "interrupted: the API process restarted before this run finished"
             experiment = session.get(Experiment, run.experiment_id)
@@ -59,6 +60,55 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+class BodyLimit:
+    """Refuse oversized request bodies before they reach the multipart parser,
+    which spools a whole body to disk before the upload route can check it.
+
+    A declared Content-Length is refused outright; a chunked body (curl -T,
+    streamed fetch, generator bodies) declares nothing, so its bytes are
+    counted as they arrive and the request is cut off at the ceiling."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] not in ("POST", "PUT", "PATCH"):
+            return await self.app(scope, receive, send)
+        # Slack for multipart framing and the other form fields.
+        limit = get_settings().max_upload_bytes + 64 * 1024
+        refusal = JSONResponse({"detail": "request body too large"}, status_code=413)
+        declared = dict(scope["headers"]).get(b"content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > limit):
+            return await refusal(scope, receive, send)
+
+        seen, over = 0, False
+
+        async def counted_receive():
+            nonlocal seen, over
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    over = True
+                    return {"type": "http.disconnect"}  # the app stops reading here
+            return message
+
+        async def send_unless_over(message):
+            if not over:
+                await send(message)
+
+        try:
+            await self.app(scope, counted_receive, send_unless_over)
+        except Exception:
+            if not over:
+                raise
+        if over:
+            await refusal(scope, receive, send)
+
+
+# Order matters: the last middleware added is the outermost. CORS must wrap
+# BodyLimit, or the browser hides its 413 behind a generic network error.
+app.add_middleware(BodyLimit)
 # The dashboard is a separate origin; set VEIL_CORS_ORIGINS for anything but localhost.
 app.add_middleware(
     CORSMiddleware,
@@ -67,21 +117,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.middleware("http")
-async def refuse_oversized_bodies(request: Request, call_next):
-    """The per-file limit in the upload route only runs after the multipart
-    parser has spooled the whole body to disk. Refuse on the declared length,
-    before a byte is read; a body that declares none is refused too."""
-    if request.method in ("POST", "PUT", "PATCH"):
-        declared = request.headers.get("content-length")
-        if declared is None:
-            return JSONResponse({"detail": "Content-Length required"}, status_code=411)
-        # Slack for multipart framing and the other form fields.
-        if not declared.isdigit() or int(declared) > get_settings().max_upload_bytes + 64 * 1024:
-            return JSONResponse({"detail": "request body too large"}, status_code=413)
-    return await call_next(request)
 
 
 for module in (projects, experiments, patterns, detectors, physical, reports):

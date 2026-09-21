@@ -474,6 +474,10 @@ def execute_run(run_id: str) -> dict[str, Any]:
             return {"run_id": run.id, "status": "completed", "evaluation_id": evaluation.id,
                     "pattern_id": pattern_row.id}
         except Exception as exc:  # noqa: BLE001 - the failure is the result
+            # First: if the failure was a flush error the session refuses every
+            # further commit, note() below would raise, and the run would stay
+            # 'running' (already committed) - blocking its experiment for good.
+            session.rollback()
             run.status = "failed"
             run.error = f"{type(exc).__name__}: {exc}"
             run.finished_at = utcnow()

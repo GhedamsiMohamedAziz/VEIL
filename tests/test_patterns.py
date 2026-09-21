@@ -79,8 +79,8 @@ def test_an_optimizer_that_cannot_improve_reports_no_improvement():
 
 def test_gradient_strategy_exports_a_pattern_that_really_lowers_the_loss():
     """A differentiable stand-in whose confidence is the scene's mean
-    brightness: the optimizer must darken the patch, and the reported losses
-    must describe the exported (quantized) pattern on one shared draw."""
+    brightness: the optimizer must darken the patch, export it quantized, and
+    report an improvement."""
     from veil.ml.patterns.optimizer import OptimizationConfig, optimize
     from veil.ml.simulation.renderer import Placement
     from veil.ml.simulation.transforms import TransformSpec

@@ -168,6 +168,11 @@ def manufacture_pattern(
     # noise, not manufacturing, into effect_retained.
     run = session.get(ExperimentRun, pattern_row.run_id) if pattern_row.run_id else None
     seed = run.seed if run is not None and run.organization_id == user.organization_id else 42
+    if run is not None and run.status != "completed":
+        # A failed run commits its pattern before it fails; artwork for the mill
+        # must not come from a pattern that was never evaluated.
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"pattern comes from a run that is {run.status}, not completed")
 
     detector = registry.get(experiment.detector_id)
     result = evaluate_production(

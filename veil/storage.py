@@ -12,6 +12,7 @@ an S3 backend can be added behind `put`/`open` without a data migration
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -91,9 +92,12 @@ def put_stream(organization_id: str, stream: BinaryIO, max_bytes: int) -> tuple[
 def local_path(uri: str) -> Path:
     if not uri.startswith("file://"):
         raise ValueError(f"unsupported artifact scheme: {uri.split('://')[0]}")
-    path = Path(uri[len("file://") :]).resolve()
-    if not path.is_relative_to(_root().resolve()):  # URIs are server-built today; keep it that way
-        raise ValueError("artifact path escapes the artifact root")
+    path = Path(uri[len("file://") :])
+    # Every stored blob is content-addressed: .../<sha[:2]>/<sha256>. Checking the
+    # shape, not the root, keeps this independent of the cwd the API started in
+    # while still refusing a URI that points at anything else on the disk.
+    if not re.fullmatch(r"[0-9a-f]{64}", path.name) or path.parent.name != path.name[:2]:
+        raise ValueError("not an artifact path")
     return path
 
 

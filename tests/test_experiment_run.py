@@ -472,3 +472,26 @@ def test_runs_left_active_by_a_dead_process_are_failed_at_startup(client, auth, 
         runs = restarted.get(f"{API}/experiments/{experiment['id']}/runs", headers=auth).json()
         assert [r["status"] for r in runs] == ["failed"] and "interrupted" in runs[0]["error"]
         assert run_to_completion(restarted, auth, experiment["id"])["status"] == "completed"
+
+
+def test_a_database_error_inside_a_run_fails_it_instead_of_wedging_it(client, auth, experiment, monkeypatch):
+    """A flush error poisons the session; the failure handler must roll back
+    first or the run stays 'running' (already committed) and blocks everything."""
+    from veil.ml import runner
+    from veil.models import Evaluation
+
+    # A real flush error, late in the run: the Evaluation violates NOT NULL.
+    monkeypatch.setattr(runner, "Evaluation",
+                        lambda **fields: Evaluation(**{**fields, "experiment_id": None}))
+    run = run_to_completion(client, auth, experiment["id"])
+    assert run["status"] == "failed" and "IntegrityError" in run["error"]
+
+    # The pattern the failed run left behind is not something to send to a mill...
+    pattern = client.get(f"{API}/experiments/{experiment['id']}/patterns", headers=auth).json()[0]
+    refused = client.post(f"{API}/patterns/{pattern['id']}/manufacture",
+                          json={"method": "knit", "stitches_per_cm": 4, "width_cm": 20,
+                                "height_cm": 25, "max_yarns": 4}, headers=auth)
+    assert refused.status_code == 409
+    # ...and the experiment can be run again.
+    monkeypatch.undo()
+    assert run_to_completion(client, auth, experiment["id"])["status"] == "completed"

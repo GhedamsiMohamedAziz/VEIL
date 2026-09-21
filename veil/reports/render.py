@@ -168,6 +168,12 @@ def to_pdf(report: dict[str, Any]) -> bytes:
             verdict = block.get("attribution", {}).get("verdict") \
                 or block.get("attribution", {}).get("reason", "no attribution")
             w.line(f"  verdict: {verdict}", size=8)
+            family = block.get("family")
+            if family and family["detectors_tested"] > 1:
+                w.line(f"  across the {family['detectors_tested']} transfer detectors tested (Holm): "
+                       f"p = {family['holm_p_value']:.3f}, "
+                       + ("still significant" if family["significant_after_correction"]
+                          else "NOT significant once corrected"), size=8)
 
     w.heading("Physical tests")
     if report["physical_tests"]:

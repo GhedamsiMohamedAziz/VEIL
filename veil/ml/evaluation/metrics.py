@@ -43,7 +43,7 @@ def summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     records = list(records)
     n = len(records)
     if n == 0:
-        return {"samples": 0, "detection_rate": None, "mean_confidence": None}
+        return {"samples": 0, "images": None, "detection_rate": None, "mean_confidence": None}
     detected = sum(1 for r in records if r["detected"])
     scores = [r["max_score"] for r in records]
     positive = [s for s in scores if s > 0]
