@@ -206,4 +206,8 @@ def apply(image: torch.Tensor, params: TransformParams, seed: int = 0) -> torch.
         gen = torch.Generator(device="cpu").manual_seed(params.seed(seed))
         noise = torch.randn(out.shape, generator=gen).to(device=out.device, dtype=out.dtype)
         out = out + noise * params.noise_std
-    return out.clamp(0.0, 1.0)
+    # Same values as a hard clamp, but the gradient passes straight through. A
+    # hard clamp gives saturated pixels a gradient of exactly zero, and at
+    # brightness 1.4 most of a bright pattern saturates: those pixels would stay
+    # frozen at whatever colour they started with.
+    return out + (out.clamp(0.0, 1.0) - out).detach()

@@ -64,3 +64,11 @@ def test_identity_transform_is_a_no_op():
 def test_rejects_wrong_shape():
     with pytest.raises(ValueError):
         T.apply(torch.rand(3, 32, 32), T.TransformParams())
+
+
+def test_saturated_pixels_still_receive_a_gradient():
+    image = torch.full((1, 3, 16, 16), 0.95, requires_grad=True)
+    out = T.apply(image, T.TransformParams(brightness=1.4))
+    assert float(out.max()) <= 1.0 and float(out.min()) >= 0.0  # values are still clamped
+    out.sum().backward()
+    assert float(image.grad.abs().sum()) > 0
