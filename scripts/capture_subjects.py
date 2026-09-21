@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
+import atexit
 import re
 import time
 
@@ -82,6 +83,9 @@ def main() -> int:
     detector = registry.get(args.detector)
 
     capture = cv2.VideoCapture(args.camera_index)
+    # Released on every way out (exception, sys.exit, q), not only the last line.
+    atexit.register(cv2.destroyAllWindows)
+    atexit.register(capture.release)
     if not capture.isOpened():
         hint = ("\nmacOS: System Settings > Privacy & Security > Camera, enable "
                 "your terminal, then restart it." if sys.platform == "darwin" else "")

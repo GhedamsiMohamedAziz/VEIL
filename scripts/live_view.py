@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
+import atexit
 import json
 import time
 import urllib.error
@@ -39,7 +40,13 @@ ARMS = {ord("b"): "baseline", ord("c"): "control", ord("k"): "candidate"}
 ARM_COLOR = {"baseline": (232, 134, 79), "control": (122, 158, 63), "candidate": (47, 127, 207)}
 
 
-def call(url: str, api_key: str, payload: dict | None = None) -> dict:
+class ApiError(RuntimeError):
+    pass
+
+
+def call(url: str, api_key: str, payload: dict | None = None, *, fatal: bool = True) -> dict:
+    """`fatal=False` raises ApiError instead of exiting - for calls made while
+    a measurement is in hand, where exiting would throw it away."""
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"X-API-Key": api_key}
     if data:
@@ -50,9 +57,12 @@ def call(url: str, api_key: str, payload: dict | None = None) -> dict:
         with urllib.request.urlopen(request, timeout=60) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        sys.exit(f"{exc.code} from {url}\n{exc.read().decode(errors='replace')[:400]}")
+        message = f"{exc.code} from {url}\n{exc.read().decode(errors='replace')[:400]}"
     except urllib.error.URLError as exc:
-        sys.exit(f"cannot reach {url}: {exc.reason}\nIs the API running?")
+        message = f"cannot reach {url}: {exc.reason}\nIs the API running?"
+    if fatal:
+        sys.exit(message)
+    raise ApiError(message)
 
 
 def resolve_pattern(api: str, api_key: str, prefix: str) -> dict:
@@ -70,9 +80,17 @@ def fetch_image(api: str, api_key: str, path: str):
     import cv2
 
     request = urllib.request.Request(f"{api}{path}", headers={"X-API-Key": api_key})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        raw = np.frombuffer(response.read(), dtype=np.uint8)
-    return cv2.imdecode(raw, cv2.IMREAD_COLOR)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = np.frombuffer(response.read(), dtype=np.uint8)
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"{exc.code} from {api}{path}\n{exc.read().decode(errors='replace')[:400]}")
+    except urllib.error.URLError as exc:
+        sys.exit(f"cannot reach {api}{path}: {exc.reason}\nIs the API running?")
+    image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+    if image is None:
+        sys.exit(f"{api}{path} did not return a decodable image")
+    return image
 
 
 def hud(frame, lines: list[tuple[str, tuple[int, int, int]]]) -> None:
@@ -161,6 +179,9 @@ def main() -> int:
                                  interpolation=cv2.INTER_NEAREST)
 
     capture = cv2.VideoCapture(args.camera_index)
+    # Released on every way out (exception, sys.exit, q), not only the last line.
+    atexit.register(cv2.destroyAllWindows)
+    atexit.register(capture.release)
     if not capture.isOpened():
         hint = ("\nmacOS: System Settings > Privacy & Security > Camera, enable "
                 "your terminal, then restart it." if sys.platform == "darwin" else "")
@@ -197,6 +218,7 @@ def main() -> int:
         save_dir.mkdir(parents=True, exist_ok=True)
         print(f"baseline frames will be saved to {save_dir}")
     session_tag, saved_count = "", 0
+    take_files: list[Path] = []  # frames of the take in progress, deleted if it is cancelled
 
     arm = "baseline"
     rolling: deque[bool] = deque(maxlen=args.window)
@@ -209,7 +231,7 @@ def main() -> int:
         total = len(recorded)
         hits = sum(1 for hit, _ in recorded if hit)
         scores = [score for _, score in recorded]
-        created = call(f"{args.api}/physical-tests", args.api_key, {
+        payload = {
             "experiment_id": experiment_id, "arm": arm, "pattern_id": pattern["id"],
             "camera": args.camera_name, "resolution": f"{width}x{height}",
             "fps": fps_reported, "distance_m": args.distance, "angle_deg": args.angle,
@@ -221,7 +243,16 @@ def main() -> int:
                 "max_score": max(scores), "mean_score": sum(scores) / total,
                 "target_label": target_label, "threshold": args.threshold,
             },
-        })
+        }
+        try:
+            created = call(f"{args.api}/physical-tests", args.api_key, payload, fatal=False)
+        except ApiError as exc:
+            # The take cost a walk across the room: keep it, and keep going.
+            kept = Path(f"physical-test-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            kept.write_text(json.dumps(payload, indent=2))
+            print(f"NOT SUBMITTED ({exc})\n  measurement kept in {kept}; "
+                  "POST it to /physical-tests once the API is back", flush=True)
+            return f"{arm:9} {hits}/{total} NOT SUBMITTED -> {kept.name}"
         line = (f"{arm:9} {hits}/{total} = {hits / total:.3f}  "
                 f"conf {sum(scores) / total:.3f}  [{created['id'][:8]}]")
         print("SUBMITTED " + line, flush=True)
@@ -246,14 +277,15 @@ def main() -> int:
             # One tag per recording: frames of one take are near-duplicates, so
             # training must hold out whole takes, never individual frames.
             session_tag, saved_count = time.strftime("%H%M%S"), 0
+            take_files = []
             print(f"recording {arm}…", flush=True)
 
         if frame_index % max(args.detect_every, 1) == 0:
             if (recording and save_dir and arm == "baseline"
                     and len(recorded) % max(args.save_every, 1) == 0):
                 saved_count += 1
-                cv2.imwrite(str(save_dir / f"rec-{session_tag}-{saved_count:03d}.jpg"),
-                            frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                take_files.append(save_dir / f"rec-{session_tag}-{saved_count:03d}.jpg")
+                cv2.imwrite(str(take_files[-1]), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             tensor = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).float() / 255.0
             with torch.no_grad():
@@ -315,6 +347,10 @@ def main() -> int:
         elif key == ord("x"):
             if countdown_until or recording:
                 print("cancelled", flush=True)
+            if recording:  # a stub take would count as a whole held-out take in training
+                for path in take_files:
+                    path.unlink(missing_ok=True)
+                take_files = []
             countdown_until, recording, recorded = 0.0, False, []
 
     capture.release()
