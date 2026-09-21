@@ -33,10 +33,19 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
     setBusy(true);
     setProblem(null);
     try {
-      await api(`/experiments/${id}/run`, { method: "POST", body: JSON.stringify({ seed: 42 }) });
-      setTimeout(() => location.reload(), 800);
+      const started = await api<Run>(`/experiments/${id}/run`, { method: "POST", body: JSON.stringify({ seed: 42 }) });
+      runs.reload();
+      // A run takes minutes: follow it until it ends instead of guessing a delay.
+      let current = started;
+      while (current.status === "queued" || current.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        current = await api<Run>(`/runs/${started.id}`);
+      }
+      if (current.status === "failed") setProblem(current.error || "run failed");
+      for (const hook of [experiment, runs, results, patterns]) hook.reload();
     } catch (e) {
       setProblem((e as Error).message);
+    } finally {
       setBusy(false);
     }
   }

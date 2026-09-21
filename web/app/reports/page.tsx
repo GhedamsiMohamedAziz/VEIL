@@ -9,20 +9,29 @@ import { pct, shortId, when } from "@/lib/format";
 export default function Reports() {
   const { data, error, loading } = useApi<Report[]>("/reports");
   const [open, setOpen] = useState<Report | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   async function download(report: Report) {
-    const response = await fetch(`${apiBase}/reports/${report.id}/pdf`, {
-      headers: { "X-API-Key": getApiKey() },
-    });
-    const url = URL.createObjectURL(await response.blob());
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    setProblem(null);
+    try {
+      const response = await fetch(`${apiBase}/reports/${report.id}/pdf`, {
+        headers: { "X-API-Key": getApiKey() },
+      });
+      // Without this an error body opens in a new tab dressed up as a PDF.
+      if (!response.ok) throw new Error(`PDF unavailable (${response.status})`);
+      const url = URL.createObjectURL(await response.blob());
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (e) {
+      setProblem((e as Error).message);
+    }
   }
 
   return (
     <Shell>
       <PageHeader title="Reports" sub="Every report carries its conditions and a limitations section." />
       <Loading error={error} loading={loading} />
+      {problem && <p className="mb-4 text-sm" style={{ color: "var(--series-candidate)" }}>{problem}</p>}
       {!error && (
         <div className="space-y-6">
           <Card>
