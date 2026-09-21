@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response, status
+from sqlalchemy.exc import IntegrityError
 
 from veil.api.deps import SessionDep, UserDep, audit, fetch
 from veil.db import scoped
@@ -56,7 +57,11 @@ def create_garment(body: GarmentCreate, session: SessionDep, user: UserDep) -> G
         tested_at=utcnow(),
     )
     session.add(garment)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError as exc:  # lost a race, or a pre-migration global constraint
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "sku already registered") from exc
     audit(session, user, "garment.create", garment.id, sku=body.sku)
     return garment
 

@@ -142,3 +142,25 @@ def test_validation_and_catalogue_never_load_detector_weights(client, auth, monk
     assert "person" in info.labels and info.version.endswith("COCO_V1")
     listed = {d["id"]: d for d in client.get(f"{API}/detectors", headers=auth).json()}
     assert listed["fasterrcnn-mobilenet-320"]["version"] == info.version
+
+
+def test_a_sku_taken_by_one_organization_is_free_for_another(client, auth, other_org_key):
+    """Uniqueness is per tenant: a global constraint turned 'is this SKU taken?'
+    into a way to enumerate another organization's garments."""
+    from veil.db import session_scope
+    from veil.models import Pattern, User
+
+    body = {"sku": "SHARED-0001", "batch_id": "B", "product_type": "tshirt"}
+    with session_scope() as session:
+        pattern_ids = []
+        for user in session.query(User).order_by(User.created_at):
+            pattern = Pattern(organization_id=user.organization_id, experiment_id="e" * 32, version=1)
+            session.add(pattern)
+            session.flush()
+            pattern_ids.append(pattern.id)
+    mine = client.post(f"{API}/garments", json={**body, "pattern_id": pattern_ids[0]}, headers=auth)
+    theirs = client.post(f"{API}/garments", json={**body, "pattern_id": pattern_ids[1]},
+                         headers={"X-API-Key": other_org_key})
+    assert (mine.status_code, theirs.status_code) == (201, 201)
+    again = client.post(f"{API}/garments", json={**body, "pattern_id": pattern_ids[0]}, headers=auth)
+    assert again.status_code == 409
