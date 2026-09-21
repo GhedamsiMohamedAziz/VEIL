@@ -133,7 +133,7 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
         },
         "physical_tests": [
             {
-                "id": t.id, "camera": t.camera, "resolution": t.resolution, "fps": t.fps,
+                "id": t.id, "arm": t.arm or "unspecified", "camera": t.camera, "resolution": t.resolution, "fps": t.fps,
                 "distance_m": t.distance_m, "angle_deg": t.angle_deg, "lighting": t.lighting,
                 "environment": t.environment, "frame_count": t.frame_count, "result": t.result,
             }

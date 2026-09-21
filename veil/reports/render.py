@@ -169,8 +169,9 @@ def to_pdf(report: dict[str, Any]) -> bytes:
     w.heading("Physical tests")
     if report["physical_tests"]:
         for test in report["physical_tests"]:
+            # The arm first: a rate means nothing until you know what was worn.
             w.line(
-                f"{test['camera']} @ {test['resolution']}, {test['distance_m']}m, "
+                f"[{test.get('arm', 'unspecified')}] {test['camera']} @ {test['resolution']}, {test['distance_m']}m, "
                 f"{test['angle_deg']} deg, {test['lighting']}, {test['environment']}: "
                 f"{test['result']}"
             )

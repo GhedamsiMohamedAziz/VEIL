@@ -245,9 +245,10 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
 
           <Card title="Physical tests">
             <Table
-              head={["Camera", "Distance", "Angle", "Lighting", "Frames", "Detected"]}
+              head={["Arm", "Camera", "Distance", "Angle", "Lighting", "Frames", "Detected"]}
               empty="No physical tests recorded. Physical robustness stays 'not measured' until one is."
               rows={(physical.data ?? []).map((t) => [
+                <strong key="arm">{t.arm || "unspecified"}</strong>,
                 t.camera,
                 <span key="d" className="tabular-nums">{t.distance_m ?? "—"} m</span>,
                 <span key="a" className="tabular-nums">{t.angle_deg ?? "—"}°</span>,

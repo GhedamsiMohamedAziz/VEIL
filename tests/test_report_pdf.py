@@ -177,3 +177,9 @@ def test_pdf_reports_transfer_results(drawn_text):
 
 def test_pdf_omits_the_transfer_section_when_none_was_run(drawn_text):
     assert "Transfer to detectors" not in drawn_text(report())
+
+
+def test_physical_tests_are_printed_with_their_arm(drawn_text):
+    test = {"arm": "baseline", "camera": "C920", "resolution": "1280x720", "distance_m": 3.0,
+            "angle_deg": 0.0, "lighting": "office", "environment": "lab", "result": {"detected": True}}
+    assert "[baseline] C920" in drawn_text(report(physical_tests=[test]))

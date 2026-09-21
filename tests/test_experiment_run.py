@@ -215,6 +215,7 @@ def test_physical_test_feeds_the_physical_robustness_score(client, auth, experim
     tests = report["payload"]["physical_tests"]
     assert len(tests) == 1
     assert tests[0]["distance_m"] == 3.0 and tests[0]["lighting"] == "office fluorescent"
+    assert tests[0]["arm"] == "candidate"  # a rate without its arm cannot be read
 
     # A second run now has physical samples to score against.
     run_to_completion(client, auth, experiment["id"])
