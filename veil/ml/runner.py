@@ -23,7 +23,7 @@ import torch
 from veil import events
 from veil.db import scoped, session_scope
 from veil.ml.detectors import registry
-from veil.ml.evaluation import comparison, metrics, robustness
+from veil.ml.evaluation import comparison, metrics, robustness, significance
 from veil.ml.evaluation.detection import sweep
 from veil.ml.patterns import constraints, generator
 from veil.ml.patterns.optimizer import OptimizationConfig, optimize
@@ -371,6 +371,18 @@ def execute_run(run_id: str) -> dict[str, Any]:
                 events.emit(events.EVALUATION_COMPLETED, **base, stage="transfer",
                             detector=transfer_id,
                             candidate_rate=transfer[transfer_id]["candidate"]["detection_rate"])
+
+            # Each transfer detector is its own significance test: correct across
+            # the family, or listing more detectors manufactures a "transfer".
+            tested = [k for k, v in transfer.items()
+                      if (v.get("attribution", {}).get("significance") or {}).get("available")]
+            adjusted = significance.holm(
+                [transfer[k]["attribution"]["significance"]["worst_p_value"] for k in tested])
+            for key, p_value in zip(tested, adjusted):
+                transfer[key]["family"] = {
+                    "detectors_tested": len(tested), "holm_p_value": p_value,
+                    "significant_after_correction": p_value < significance.SIGNIFICANCE_LEVEL,
+                }
 
             # Physical records only mean something once you know what was on
             # the subject. Only 'candidate' records score; 'unspecified' ones

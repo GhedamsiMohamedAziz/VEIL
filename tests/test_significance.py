@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from veil.ml.evaluation.significance import (
     SIGNIFICANCE_LEVEL,
     against_every_draw,
@@ -82,3 +84,13 @@ def test_significance_requires_every_draw_to_agree():
 
 def test_no_draws_is_reported_as_unavailable():
     assert against_every_draw([], records([True]))["available"] is False
+
+
+def test_holm_adjusts_across_the_family_and_keeps_the_order_given():
+    from veil.ml.evaluation.significance import holm
+
+    assert holm([]) == []
+    assert holm([0.03]) == [0.03]  # one test: nothing to correct
+    adjusted = holm([0.04, 0.01, 0.03])
+    assert adjusted == pytest.approx([0.06, 0.03, 0.06])  # 3*0.01, max(.03, 2*0.03), max(.06, 1*0.04)
+    assert holm([0.5, 0.9]) == pytest.approx([1.0, 1.0])

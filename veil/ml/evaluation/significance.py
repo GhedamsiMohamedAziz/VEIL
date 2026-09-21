@@ -104,3 +104,15 @@ def against_every_draw(
             "hold against every unoptimized control, not the weakest one."
         ),
     }
+
+
+def holm(p_values: list[float]) -> list[float]:
+    """Holm step-down adjusted p-values, in the order given. Testing a pattern
+    against m transfer detectors gives m chances of a spurious "significant";
+    the adjusted value is the one to hold against alpha."""
+    order = sorted(range(len(p_values)), key=lambda i: p_values[i])
+    adjusted, running = [0.0] * len(p_values), 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (len(p_values) - rank) * p_values[i]))
+        adjusted[i] = running
+    return adjusted
