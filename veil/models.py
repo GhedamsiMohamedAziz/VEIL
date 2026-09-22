@@ -17,10 +17,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -128,6 +130,13 @@ class ExperimentRun(Base, TimestampMixin):
     can change the numbers."""
 
     __tablename__ = "experiment_runs"
+    # At most one active run per experiment, enforced where a check-then-insert
+    # in the route cannot be. Existing databases get it with migration 0002.
+    __table_args__ = (
+        Index("uq_active_run", "experiment_id", unique=True,
+              sqlite_where=text("status IN ('queued', 'running')"),
+              postgresql_where=text("status IN ('queued', 'running')")),
+    )
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
     experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
@@ -203,11 +212,16 @@ class Garment(Base, TimestampMixin):
     """VEIL Wear physical item metadata (the QR/NFC payload target)."""
 
     __tablename__ = "garments"
+    __table_args__ = (UniqueConstraint("organization_id", "sku", name="uq_garment_org_sku"),)
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
     pattern_id: Mapped[str] = mapped_column(ForeignKey("patterns.id"), index=True)
     experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"))
-    sku: Mapped[str] = mapped_column(String(64), unique=True)
+    # Unique per organization, like every lookup of it. A global constraint
+    # let one tenant learn which SKUs another had registered (201 vs error).
+    # Databases older than migration 0002 keep the global constraint until
+    # `veil db upgrade`; the route answers 409 either way, never 500.
+    sku: Mapped[str] = mapped_column(String(64))
     batch_id: Mapped[str] = mapped_column(String(64))
     product_type: Mapped[str] = mapped_column(String(64))  # tshirt | hoodie | jacket
     material: Mapped[str] = mapped_column(String(200), default="")

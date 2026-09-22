@@ -41,8 +41,17 @@ EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def load(path: Path, height: int, width: int) -> torch.Tensor:
+    """Fit inside height x width and pad with grey - never stretch. The live
+    detector sees undistorted people; a pattern trained on squashed ones is
+    trained for a camera that does not exist."""
     tensor = image_to_tensor(path.read_bytes(), size=None)
-    return F.interpolate(tensor, size=(height, width), mode="bilinear", align_corners=False)
+    h, w = tensor.shape[-2:]
+    scale = min(height / h, width / w)
+    new_h, new_w = max(round(h * scale), 1), max(round(w * scale), 1)
+    tensor = F.interpolate(tensor, size=(new_h, new_w), mode="bilinear",
+                           align_corners=False, antialias=True)
+    top, left = (height - new_h) // 2, (width - new_w) // 2
+    return F.pad(tensor, (left, width - new_w - left, top, height - new_h - top), value=0.5)
 
 
 def main() -> int:
@@ -53,7 +62,9 @@ def main() -> int:
     parser.add_argument("--label", default="person")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--height", type=int, default=384)
-    parser.add_argument("--width", type=int, default=288)
+    parser.add_argument("--width", type=int, default=0,
+                        help="0 (default): follow the first image's aspect ratio, so "
+                             "webcam frames fill the canvas instead of being letterboxed")
     parser.add_argument("--holdout", type=float, default=0.3,
                         help="share of usable images never optimized against")
     parser.add_argument("--iterations", type=int, default=150)
@@ -72,6 +83,17 @@ def main() -> int:
                    if p.suffix.lower() in EXTENSIONS)
     if not paths:
         sys.exit(f"no images in {args.folder}")
+    fixed_placement = None
+    if args.placement:  # checked now, not after the detector has loaded
+        try:
+            cx, cy, pw, ph = (float(v) for v in args.placement.split(","))
+        except ValueError:
+            sys.exit(f"--placement expects CX,CY,W,H (four numbers), got {args.placement!r}")
+        fixed_placement = Placement(cx=cx, cy=cy, width=pw, height=ph)
+    if not args.width:
+        h, w = image_to_tensor(paths[0].read_bytes(), size=None).shape[-2:]
+        args.width = max(round(args.height * w / h / 16) * 16, 16)
+        print(f"canvas {args.width}x{args.height} from {paths[0].name}")
     detector = registry.get(args.detector)
 
     # 1. Qualify: keep images where the detector confidently sees the target,
@@ -86,11 +108,8 @@ def main() -> int:
             print(f"  skip  {path.name}  (no {args.label!r} at {args.threshold})")
             continue
         best = max(hits, key=lambda d: d.score)
-        if args.placement:
-            cx, cy, pw, ph = (float(v) for v in args.placement.split(","))
-            placement = Placement(cx=cx, cy=cy, width=pw, height=ph)
-        else:
-            placement = Placement.from_detection(best, (args.height, args.width), args.coverage)
+        placement = fixed_placement or Placement.from_detection(
+            best, (args.height, args.width), args.coverage)
         usable.append((path, image, placement))
         print(f"  ok    {path.name}  score {best.score:.3f}")
     if len(usable) < 2:
@@ -164,7 +183,6 @@ def main() -> int:
                             size=(96, 96), mode="area").squeeze(0)
 
     print()
-    verdict = None
     for name, subset in (("TRAIN (seen)", train), ("HELD-OUT (never seen)", test)):
         baseline = measure(subset, None)
         draws = [measure(subset, c) for c in controls]
@@ -180,7 +198,6 @@ def main() -> int:
         print(f"  vs best control {report.get('attributable_vs_best_control', 0):+.3f}   "
               f"worst p {report['significance']['worst_p_value']:.4f}")
         print(f"  -> {report['verdict']}\n")
-        verdict = report
 
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "pattern.png").write_bytes(to_png(result.pattern))

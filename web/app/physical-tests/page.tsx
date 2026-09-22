@@ -18,12 +18,13 @@ export default function PhysicalTests() {
         <div className="space-y-6">
           <Card>
             <Table
-              head={["Experiment", "Camera", "Resolution", "Distance", "Angle", "Lighting", "Environment", "Frames", "Detection rate", "Recorded"]}
+              head={["Experiment", "Arm", "Camera", "Resolution", "Distance", "Angle", "Lighting", "Environment", "Frames", "Detection rate", "Recorded"]}
               empty="No physical tests recorded. Run scripts/physical_test.py against a printed pattern."
               rows={(data ?? []).map((t) => [
                 <Link key="e" href={`/experiments/${t.experiment_id}`} className="underline">
                   {shortId(t.experiment_id)}
                 </Link>,
+                <strong key="arm">{t.arm || "unspecified"}</strong>,
                 t.camera,
                 <span key="r" style={{ color: "var(--ink-secondary)" }}>{t.resolution}</span>,
                 <span key="d" className="tabular-nums">{t.distance_m ?? "—"} m</span>,

@@ -78,3 +78,27 @@ def test_comparison_delta_direction():
     result = compare(baseline, candidate)
     assert result["delta"]["detection_rate"] == -0.5
     assert result["delta"]["mean_confidence"] < 0
+
+
+def test_ground_truth_ignores_geometrically_transformed_records():
+    annotations = {"img": [{"label": "person", "box": [0, 0, 10, 10]}]}
+    rotated = {**record(True, 0.9, boxes=[[40, 40, 50, 50]]), "transform": {"rotation_deg": 30.0}}
+    dimmed = {**record(True, 0.9, boxes=[[0, 0, 10, 10]]), "transform": {"brightness": 0.6, "scale": 1.0}}
+    result = metrics.ground_truth_metrics([rotated, dimmed], annotations, "person")
+    assert result["annotated_samples"] == 1 and result["false_positives"] == 0
+    assert result["recall"] == 1.0
+
+
+def test_annotations_are_scaled_into_the_run_frame():
+    from veil.ml.runner import _annotations_at
+
+    scaled = _annotations_at({"a": [{"label": "person", "box": [120, 60, 360, 480]}]},
+                             {"a": (480, 480)}, 320)
+    assert scaled["a"][0]["box"] == [80.0, 40.0, 240.0, 320.0]
+
+
+def test_ground_truth_says_so_when_the_sweep_has_no_unwarped_point():
+    annotations = {"img": [{"label": "person", "box": [0, 0, 10, 10]}]}
+    rotated = {**record(True, 0.9, boxes=[[0, 0, 10, 10]]), "transform": {"rotation_deg": -30.0}}
+    result = metrics.ground_truth_metrics([rotated], annotations, "person")
+    assert result["available"] is False and "labelled frame" in result["reason"]

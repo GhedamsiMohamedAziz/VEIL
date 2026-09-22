@@ -19,6 +19,16 @@ def test_grid_sampling_is_exhaustive_and_capped():
     capped = T.TransformSpec(max_samples=5).sample()
     assert len(capped) == 5
 
+    # The default grid (432 points) exceeds the cap: capping must thin it out,
+    # never drop a whole value of an axis, and stay reproducible.
+    default = T.TransformSpec()
+    sampled = default.sample()
+    assert len(sampled) == default.max_samples
+    for axis in ("rotation_deg", "scale", "perspective", "brightness", "blur_sigma",
+                 "noise_std", "deformation"):
+        assert {getattr(p, axis) for p in sampled} == set(getattr(default, axis)), axis
+    assert sampled == default.sample()
+
 
 def test_same_seed_gives_identical_parameters_and_pixels():
     spec = T.TransformSpec(mode="random", samples=8)
@@ -54,3 +64,11 @@ def test_identity_transform_is_a_no_op():
 def test_rejects_wrong_shape():
     with pytest.raises(ValueError):
         T.apply(torch.rand(3, 32, 32), T.TransformParams())
+
+
+def test_saturated_pixels_still_receive_a_gradient():
+    image = torch.full((1, 3, 16, 16), 0.95, requires_grad=True)
+    out = T.apply(image, T.TransformParams(brightness=1.4))
+    assert float(out.max()) <= 1.0 and float(out.min()) >= 0.0  # values are still clamped
+    out.sum().backward()
+    assert float(image.grad.abs().sum()) > 0

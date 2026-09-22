@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.4",
     "sqlalchemy>=2.0",
+    "alembic>=1.13",
     "python-multipart>=0.0.9",
     "numpy>=1.26",
     "pillow>=10.0",
@@ -27,6 +28,14 @@ veil = "veil.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# piggy: syntax errors and pyflakes only - the checks that catch bugs. Widen
+# once the codebase is clean under them.
+select = ["E9", "F"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["veil"]

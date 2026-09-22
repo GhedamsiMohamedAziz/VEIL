@@ -74,6 +74,9 @@ class OptimizationResult:
         }
 
 
+_REPORT_STEP = 1_000_003  # seeds the reporting draw; far outside any iteration count
+
+
 def _penalties(pattern: torch.Tensor, cfg: OptimizationConfig) -> torch.Tensor:
     return (
         cfg.tv_weight * constraints.total_variation(pattern)
@@ -85,7 +88,7 @@ def _expected_score(
     detector: Detector,
     images: torch.Tensor,
     pattern: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     spec: T.TransformSpec,
     cfg: OptimizationConfig,
     step: int,
@@ -111,12 +114,14 @@ def _expected_score(
 def optimize(
     detector: Detector,
     images: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     spec: T.TransformSpec,
     cfg: OptimizationConfig,
     on_iteration: Callable[[int, dict[str, float]], None] | None = None,
 ) -> OptimizationResult:
-    pattern = generator.initialize(cfg.pattern_size, cfg.init_method, cfg.seed)
+    # On the images' device: a CPU pattern under a GPU detector round-trips the
+    # whole scene batch every step.
+    pattern = generator.initialize(cfg.pattern_size, cfg.init_method, cfg.seed).to(images.device)
     differentiable = bool(getattr(detector, "differentiable", False))
     strategy = "gradient" if differentiable else "evolution"
     history: list[dict[str, float]] = []
@@ -124,12 +129,10 @@ def optimize(
     def loss_of(p: torch.Tensor, step: int) -> torch.Tensor:
         return _expected_score(detector, images, p, placement, spec, cfg, step, differentiable) + _penalties(p, cfg)
 
+    start = pattern.clone()
     if differentiable:
         param = pattern.clone().requires_grad_(True)
         opt = torch.optim.Adam([param], lr=cfg.learning_rate)
-        initial = float(loss_of(param.detach(), 0))
-        best_loss = initial
-        best = param.detach().clone()
         for step in range(cfg.iterations):
             opt.zero_grad()
             loss = loss_of(param, step)
@@ -138,25 +141,29 @@ def optimize(
             with torch.no_grad():
                 param.clamp_(0, 1)
             value = float(loss.detach())
-            if value < best_loss:
-                best_loss, best = value, param.detach().clone()
             record = {"iteration": step, "loss": value}
             history.append(record)
             if on_iteration:
                 on_iteration(step, record)
-        pattern, final = best, best_loss
+        # The final iterate, not the step with the lowest loss: each step's loss
+        # is measured on its own transformation draw, so the minimum picks the
+        # easiest draw rather than the best pattern.
+        pattern = param.detach()
     else:
         gen = torch.Generator().manual_seed(cfg.seed)
         with torch.no_grad():
             current = pattern
-            best_loss = initial = float(loss_of(current, 0))
             for step in range(cfg.iterations):
                 # Smooth mutation: pixel-level noise would not survive print.
                 coarse = torch.randn(3, 16, 16, generator=gen)
                 mutation = torch.nn.functional.interpolate(
                     coarse.unsqueeze(0), size=current.shape[-2:], mode="bilinear", align_corners=False
-                ).squeeze(0)
+                ).squeeze(0).to(current.device)
                 candidate = (current + cfg.step_size * mutation).clamp(0, 1)
+                # Both scored on this step's transformation draw. Comparing the
+                # candidate's draw to an older one accepts whatever met the
+                # easiest transformations, not whatever is better.
+                best_loss = float(loss_of(current, step))
                 value = float(loss_of(candidate, step))
                 if value < best_loss:
                     best_loss, current = value, candidate
@@ -164,12 +171,18 @@ def optimize(
                 history.append(record)
                 if on_iteration:
                     on_iteration(step, record)
-            pattern, final = current, best_loss
+            pattern = current
 
+    # What gets reported is measured once, after the fact: start and result,
+    # both snapped to the palette (the snap can erase the effect, and only the
+    # snapped pattern is ever exported), on one transformation draw that no
+    # iteration used. The minimum of N noisy per-step losses would show an
+    # "improvement" for an optimizer that did nothing.
+    result = constraints.quantize_to_palette(pattern.detach())
+    with torch.no_grad():
+        initial = float(loss_of(constraints.quantize_to_palette(start), _REPORT_STEP))
+        final = float(loss_of(result, _REPORT_STEP))
     return OptimizationResult(
-        pattern=constraints.quantize_to_palette(pattern.detach()),
-        history=history,
-        strategy=strategy,
-        initial_loss=initial,
-        final_loss=final,
+        pattern=result, history=history, strategy=strategy,
+        initial_loss=initial, final_loss=final,
     )

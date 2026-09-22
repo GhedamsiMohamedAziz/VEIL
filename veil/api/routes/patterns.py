@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response, status
+from sqlalchemy.exc import IntegrityError
 
 from veil.api.deps import SessionDep, UserDep, audit, fetch
 from veil.db import scoped
 from veil.ml.detectors import registry
-from veil.ml.evaluation.metrics import summarize
 from veil.ml.manufacture_eval import evaluate_production
 from veil.ml.patterns.manufacture import ProductionSpec, to_artwork
 from veil.ml.patterns.serialization import from_png, to_png
 from veil.ml.runner import _load_images
 from veil.ml.simulation.renderer import Placement
 from veil.ml.simulation.transforms import TransformSpec
-from veil.models import Artifact, Dataset, Evaluation, Experiment, Garment, Pattern, utcnow
+from veil.models import (
+    Artifact,
+    Dataset,
+    Evaluation,
+    Experiment,
+    ExperimentRun,
+    Garment,
+    Pattern,
+    utcnow,
+)
 from veil.schemas import GarmentCreate, GarmentOut, PatternOut, ProductionRequest
 from veil.storage import put_bytes, read_bytes
 
@@ -56,7 +65,11 @@ def create_garment(body: GarmentCreate, session: SessionDep, user: UserDep) -> G
         tested_at=utcnow(),
     )
     session.add(garment)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError as exc:  # lost a race, or a pre-migration global constraint
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "sku already registered") from exc
     audit(session, user, "garment.create", garment.id, sku=body.sku)
     return garment
 
@@ -118,7 +131,8 @@ def manufacture_pattern(
     threshold = float(config.get("threshold", 0.5))
     image_size = int(config.get("image_size", 320))
     transform_spec = TransformSpec.from_config(config.get("transforms"))
-    placement = Placement(**(pattern_row.generation_parameters or {}).get("placement", {}))
+    generation = pattern_row.generation_parameters or {}
+    single = Placement(**generation.get("placement", {}))
 
     evaluation = session.scalar(
         scoped(Evaluation, user.organization_id)
@@ -136,11 +150,34 @@ def manufacture_pattern(
         images, image_ids = _load_images(session, dataset, image_size)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    # Measure on the images the run evaluated on, each with its own placement:
+    # `digital_rate` came from exactly those, and a production rate over the
+    # optimizer's images would not be comparable to it.
+    evaluated = (generation.get("split") or {}).get("evaluate")
+    if evaluated:
+        keep = [i for i, image_id in enumerate(image_ids) if image_id in set(evaluated)]
+        if not keep:  # measuring on other images would give a rate comparable to nothing
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "the images this pattern was evaluated on are no longer in the dataset")
+        images, image_ids = images[keep], [image_ids[i] for i in keep]
+    stored = generation.get("placements") or {}
+    placement = [Placement(**stored[i]) if i in stored else single for i in image_ids]
+
+    # The run's own seed: it drives the cloth deformation and the sensor noise,
+    # and `digital_rate` below was measured under it. Another seed would put
+    # noise, not manufacturing, into effect_retained.
+    run = session.get(ExperimentRun, pattern_row.run_id) if pattern_row.run_id else None
+    seed = run.seed if run is not None and run.organization_id == user.organization_id else 42
+    if run is not None and run.status != "completed":
+        # A failed run commits its pattern before it fails; artwork for the mill
+        # must not come from a pattern that was never evaluated.
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"pattern comes from a run that is {run.status}, not completed")
 
     detector = registry.get(experiment.detector_id)
     result = evaluate_production(
         detector, images, image_ids, pattern, placement, transform_spec, production,
-        target_label=target_label, threshold=threshold, seed=42,
+        target_label=target_label, threshold=threshold, seed=seed,
         control_rate=control_rate, digital_rate=digital_rate,
     )
 

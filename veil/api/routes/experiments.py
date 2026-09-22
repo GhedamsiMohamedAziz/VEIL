@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from veil import jobs
 from veil.api.deps import SessionDep, UserDep, audit, fetch
@@ -30,8 +31,8 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "dataset belongs to another project")
     if not registry.exists(body.detector_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"unknown detector; see GET /detectors")
-    detector_labels = registry.get(body.detector_id, cached=False).metadata().labels
+                            "unknown detector; see GET /detectors")
+    detector_labels = registry.info(body.detector_id).labels
     target = body.configuration.target_label
     if detector_labels and target not in detector_labels:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -40,7 +41,7 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
         if not registry.exists(transfer_id):
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 f"unknown transfer detector {transfer_id!r}; see GET /detectors")
-        transfer_labels = registry.get(transfer_id, cached=False).metadata().labels
+        transfer_labels = registry.info(transfer_id).labels
         if transfer_labels and target not in transfer_labels:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -48,16 +49,28 @@ def create_experiment(body: ExperimentCreate, session: SessionDep, user: UserDep
                 "a transfer result against a detector that cannot produce the "
                 "target label would be meaningless",
             )
-    next_number = 1 + (session.scalar(
-        select(func.count()).select_from(Experiment).where(Experiment.project_id == body.project_id)
-    ) or 0)
-    experiment = Experiment(
-        organization_id=user.organization_id, project_id=body.project_id, number=next_number,
-        name=body.name, description=body.description, detector_id=body.detector_id,
-        dataset_id=body.dataset_id, configuration=body.configuration.model_dump(), status="draft",
-    )
-    session.add(experiment)
-    session.flush()
+    # max+1, not count+1: a count reuses the number of a deleted experiment, and
+    # "#003" in a report must name one experiment forever. Two concurrent
+    # creations can still pick the same number; the unique constraint catches
+    # that and the loser simply takes the next one.
+    for _attempt in range(3):
+        next_number = 1 + (session.scalar(
+            select(func.max(Experiment.number)).where(Experiment.project_id == body.project_id)
+        ) or 0)
+        experiment = Experiment(
+            organization_id=user.organization_id, project_id=body.project_id, number=next_number,
+            name=body.name, description=body.description, detector_id=body.detector_id,
+            dataset_id=body.dataset_id, configuration=body.configuration.model_dump(), status="draft",
+        )
+        try:
+            with session.begin_nested():
+                session.add(experiment)
+            break
+        except IntegrityError as exc:
+            if "number" not in str(exc.orig):  # a missing dataset is not "contention"
+                raise
+    else:
+        raise HTTPException(status.HTTP_409_CONFLICT, "experiment numbering is contended; retry")
     audit(session, user, "experiment.create", experiment.id)
     return experiment
 
@@ -94,7 +107,11 @@ def start_run(experiment_id: str, body: RunCreate, session: SessionDep, user: Us
     )
     experiment.status = "queued"
     session.add(run)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError as exc:  # uq_active_run: a concurrent request queued first
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "a run is already active") from exc
     audit(session, user, "experiment.run", run.id, seed=body.seed)
     run_id = run.id
     session.commit()  # the worker reads this row from another thread

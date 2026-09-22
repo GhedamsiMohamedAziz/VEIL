@@ -19,10 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
 import io
-import json
 import urllib.request
 
-import numpy as np
 from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm

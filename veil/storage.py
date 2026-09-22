@@ -12,7 +12,9 @@ an S3 backend can be added behind `put`/`open` without a data migration
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import BinaryIO
 
@@ -21,7 +23,6 @@ from veil.config import get_settings
 _MAGIC = {
     b"\x89PNG\r\n\x1a\n": "image/png",
     b"\xff\xd8\xff": "image/jpeg",
-    b"RIFF": "image/webp",
 }
 
 
@@ -30,7 +31,12 @@ def sniff_media_type(head: bytes) -> str | None:
     for magic, mime in _MAGIC.items():
         if head.startswith(magic):
             return mime
-    if head[4:12] in (b"ftypisom", b"ftypmp42") or head[4:8] == b"ftyp":
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":  # bare RIFF is also WAV/AVI
+        return "image/webp"
+    # ISO base media; the brands that are MP4/QuickTime video, not JPEG 2000 or HEIF stills.
+    if head[4:8] == b"ftyp" and head[8:12] in (
+            b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1",
+            b"mp4v", b"M4V ", b"qt  ", b"dash", b"mmp4"):
         return "video/mp4"
     return None
 
@@ -49,7 +55,9 @@ def put_bytes(organization_id: str, data: bytes) -> tuple[str, str, int]:
     dest = path_for(organization_id, digest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not dest.exists():
-        tmp = dest.with_suffix(".part")
+        # Unique per writer: two uploads of the same bytes share `dest`, and a
+        # shared temp name let one promote the other's half-written file.
+        tmp = dest.with_suffix(f".{uuid.uuid4().hex}.part")
         tmp.write_bytes(data)
         tmp.replace(dest)
     return f"file://{dest.resolve()}", digest, len(data)
@@ -84,7 +92,13 @@ def put_stream(organization_id: str, stream: BinaryIO, max_bytes: int) -> tuple[
 def local_path(uri: str) -> Path:
     if not uri.startswith("file://"):
         raise ValueError(f"unsupported artifact scheme: {uri.split('://')[0]}")
-    return Path(uri[len("file://") :])
+    path = Path(uri[len("file://") :])
+    # Every stored blob is content-addressed: .../<sha[:2]>/<sha256>. Checking the
+    # shape, not the root, keeps this independent of the cwd the API started in
+    # while still refusing a URI that points at anything else on the disk.
+    if not re.fullmatch(r"[0-9a-f]{64}", path.name) or path.parent.name != path.name[:2]:
+        raise ValueError("not an artifact path")
+    return path
 
 
 def read_bytes(uri: str) -> bytes:

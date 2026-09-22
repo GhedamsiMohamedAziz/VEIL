@@ -2,7 +2,7 @@
 
 piggy: an in-process thread pool, not Celery+Redis. A run is minutes of
 CPU/GPU-bound torch work on a single box, the queue state already lives in
-`experiment_runs.status`, and a restart can requeue anything left `running`.
+`experiment_runs.status`, and a restart fails anything left active (api/main.py).
 Swap in a real broker when runs must survive a deploy or span machines -
 `submit()` is the only seam that changes (ADR-005).
 """
@@ -40,6 +40,8 @@ def submit(run_id: str) -> Future:
 
 def _report(run_id: str, future: Future) -> None:
     exc = future.exception()
+    if exc is None:  # a future that raised stays, so wait() can still surface it
+        _futures.pop(run_id, None)
     if exc is not None:  # pragma: no cover - execute_run catches its own errors
         events.emit(events.EXPERIMENT_FAILED, run_id=run_id, error=f"{type(exc).__name__}: {exc}")
 

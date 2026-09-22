@@ -17,6 +17,9 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch torchvisi
 
 ENV VEIL_DATABASE_URL=sqlite:////data/veil.db \
     VEIL_ARTIFACT_ROOT=/data/artifacts
+# Uploads are parsed by pillow/torch/reportlab: never as root.
+RUN useradd --uid 10001 --no-create-home veil && mkdir -p /data && chown -R veil /data
+USER veil
 VOLUME ["/data"]
 EXPOSE 8000
 

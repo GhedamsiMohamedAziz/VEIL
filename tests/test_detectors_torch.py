@@ -58,9 +58,10 @@ def test_score_stays_connected_when_nothing_is_detected(detector):
     stops the moment it starts working."""
     blank = torch.full((1, 3, 320, 320), 0.5, requires_grad=True)
     score = detector.score(blank, "person")
-    assert float(score.detach()) == 0.0
-    score.sum().backward()  # must not raise
-    assert blank.grad is not None
+    assert detector.predict(blank.detach(), threshold=0.05) == [[]]  # truly nothing detected
+    assert 0.0 < float(score.detach()) < 0.05  # below anything selection lets through
+    score.sum().backward()
+    assert float(blank.grad.abs().sum()) > 0  # `is not None` is true of an all-zero gradient
 
 
 def test_unknown_label_is_rejected(detector):
@@ -81,6 +82,21 @@ def test_gradient_strategy_is_selected_and_produces_a_printable_pattern(detector
     assert len(result.history) == 2
     assert result.pattern.shape == (3, 32, 32)
 
-    from veil.ml.patterns.constraints import PRINTABLE_PALETTE, non_printability
+    from veil.ml.patterns.constraints import non_printability
 
     assert float(non_printability(result.pattern)) < 1e-5  # quantized on export
+
+
+def test_pre_selection_scores_are_not_shared_between_threads(detector):
+    """The registry hands one detector to the run worker and to request threads.
+    A forward elsewhere must not replace what `score` is about to read."""
+    import threading
+
+    blank = torch.full((2, 3, 320, 320), 0.5)
+    expected = detector.score(blank, "person").detach()
+    detector._forward(blank)  # this thread's state now describes a 2-image batch
+    other = threading.Thread(target=lambda: detector.predict(torch.rand(1, 3, 320, 320)))
+    other.start()
+    other.join()
+    here = torch.stack([detector._raw_confidence(i, 1) for i in range(2)]).detach()
+    assert torch.allclose(here, expected)

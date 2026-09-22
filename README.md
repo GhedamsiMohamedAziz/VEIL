@@ -66,6 +66,27 @@ cd web && npm install && npm run dev                  # http://localhost:3000
 Paste the key on **Settings** in the dashboard. Docker: `cd infrastructure &&
 docker compose up --build`.
 
+**One API process per database.** Runs execute in a worker thread of the API
+process, and at startup any run still `queued`/`running` is closed as failed
+(its worker died with the previous process). Several processes or containers
+on one database are not supported; if you must, set
+`VEIL_FAIL_ORPHANED_RUNS_ON_START=false` so they do not fail each other's runs.
+
+**Schema changes** are Alembic migrations in `veil/migrations/`. A new database
+is created at the latest schema and a versioned one is upgraded when the API
+starts. A database created *before* migrations existed is never changed on
+startup (a warning says so); adopt it once, explicitly:
+
+```bash
+.venv/bin/veil db status     # empty | versioned | legacy, and the revision
+.venv/bin/veil db upgrade    # snapshots an SQLite file to <name>.bak-<timestamp>, then migrates;
+                             # a failed upgrade restores it. PostgreSQL: take your own dump first
+```
+
+New migration after editing `veil/models.py`: `.venv/bin/veil db revision "what
+changed"` against a database at head — then read the generated file:
+autogenerate cannot see unnamed constraints (`0002` drops one by hand).
+
 Scripts add the repo root to `sys.path`, so they run from a checkout whether
 or not the package is installed — but use `.venv/bin/python`, not a system or
 conda `python`.
@@ -390,7 +411,6 @@ endpoint to add one and `POST /detectors` returns 405.
 | not built | why | when |
 |---|---|---|
 | Celery + Redis | runs are minutes on one box; state is in `experiment_runs` | when runs must survive a deploy |
-| **Alembic** | was pre-release | **now blocking** — real data exists, one migration was hand-written |
 | Kubernetes | one box runs everything | more than one box |
 | MLflow / W&B | runs already pin every version | comparing hundreds of runs visually |
 | Payments | not in scope | when there is something to sell |

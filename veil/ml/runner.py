@@ -11,6 +11,7 @@ sweep -> comparison. Each stage emits a structured event.
 
 from __future__ import annotations
 
+import random
 import subprocess
 import traceback
 from collections.abc import Callable
@@ -22,7 +23,7 @@ import torch
 from veil import events
 from veil.db import scoped, session_scope
 from veil.ml.detectors import registry
-from veil.ml.evaluation import comparison, metrics, robustness
+from veil.ml.evaluation import comparison, metrics, robustness, significance
 from veil.ml.evaluation.detection import sweep
 from veil.ml.patterns import constraints, generator
 from veil.ml.patterns.optimizer import OptimizationConfig, optimize
@@ -57,11 +58,14 @@ def code_version() -> str:
     return f"v{__version__}"
 
 
-def _load_images(session, dataset: Dataset, size: int) -> tuple[torch.Tensor, list[str]]:
+def _load_images(
+    session, dataset: Dataset, size: int, original_sizes: dict[str, tuple[int, int]] | None = None,
+) -> tuple[torch.Tensor, list[str]]:
     """Decode the dataset's artifacts into one padded batch.
 
     Images are resized to a common square so a batch can be formed; the
-    resize factor is part of the recorded configuration.
+    resize factor is part of the recorded configuration. Pass a dict as
+    `original_sizes` to receive each image's (height, width) before the resize.
     """
     tensors, ids = [], []
     for artifact_id in dataset.artifact_ids:
@@ -71,8 +75,11 @@ def _load_images(session, dataset: Dataset, size: int) -> tuple[torch.Tensor, li
         if not artifact.media_type.startswith("image/"):
             continue  # piggy: video sweeps land in v0.2 (see docs/roadmap.md)
         tensor = image_to_tensor(read_bytes(artifact.uri), size=None)
+        if original_sizes is not None:
+            original_sizes[artifact.id] = (int(tensor.shape[-2]), int(tensor.shape[-1]))
         tensor = torch.nn.functional.interpolate(
-            tensor, size=(size, size), mode="bilinear", align_corners=False
+            tensor, size=(size, size), mode="bilinear", align_corners=False,
+            antialias=True,  # a 4000px photo shrunk without it aliases more than the effect measured
         )
         tensors.append(tensor)
         ids.append(artifact.id)
@@ -81,15 +88,55 @@ def _load_images(session, dataset: Dataset, size: int) -> tuple[torch.Tensor, li
     return torch.cat(tensors, dim=0), ids
 
 
-def _placement_for(detector, images: torch.Tensor, target_label: str, threshold: float) -> Placement:
+def _annotations_at(
+    annotations: dict[str, list[dict[str, Any]]],
+    original_sizes: dict[str, tuple[int, int]], size: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Annotation boxes are drawn on the original photo; detections come from
+    the `size`-square copy. Bring the boxes into that frame before matching."""
+    scaled = {}
+    for image_id, items in annotations.items():
+        if image_id not in original_sizes:
+            continue
+        height, width = original_sizes[image_id]
+        sx, sy = size / width, size / height
+        scaled[image_id] = [
+            {**a, "box": [a["box"][0] * sx, a["box"][1] * sy, a["box"][2] * sx, a["box"][3] * sy]}
+            for a in items
+        ]
+    return scaled
+
+
+def _placements_for(detector, images: torch.Tensor, target_label: str, threshold: float) -> list[Placement]:
     """Put the print where the detector currently sees the target, so the
-    experiment tests the interesting region rather than a corner of the sky."""
+    experiment tests the interesting region rather than a corner of the sky.
+
+    One placement per image: subjects stand in different places, and image 0's
+    torso coordinates are background in every other photo."""
     size = images.shape[-2:]
-    for dets in detector.predict(images[:1], threshold=threshold):
-        for det in dets:
-            if det.label == target_label:
-                return Placement.from_detection(det, (int(size[0]), int(size[1])))
-    return Placement(cx=0.5, cy=0.5, width=0.3, height=0.3)
+    placements = []
+    for dets in detector.predict(images, threshold=threshold):
+        hit = next((d for d in dets if d.label == target_label), None)
+        placements.append(
+            Placement.from_detection(hit, (int(size[0]), int(size[1]))) if hit
+            else Placement(cx=0.5, cy=0.5, width=0.3, height=0.3)
+        )
+    return placements
+
+
+def split_indices(count: int, seed: int) -> tuple[list[int], list[int], bool]:
+    """Disjoint (optimize, evaluate) image indices, and whether they are disjoint.
+
+    A pattern scored on the images it was optimized on reports a training
+    score: controls are never optimized, so the candidate's advantage would be
+    guaranteed rather than measured. One image cannot be split; the run still
+    executes, and `held_out=False` travels with every number it produces."""
+    if count < 2:
+        return list(range(count)), list(range(count)), False
+    order = list(range(count))
+    random.Random(seed).shuffle(order)
+    half = count // 2  # the evaluate side gets the odd image: it carries the claims
+    return sorted(order[:half]), sorted(order[half:]), True
 
 
 def evaluate_pattern(
@@ -98,7 +145,7 @@ def evaluate_pattern(
     spec: TransformSpec,
     target_label: str,
     pattern: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     *,
     seed: int,
     threshold: float,
@@ -130,7 +177,7 @@ def evaluate_pattern(
     for draw in range(control_draws):
         control_pattern = constraints.quantize_to_palette(
             generator.initialize(pattern_size, init_method, seed=seed + 100_000 + draw)
-        )
+        ).to(images.device)
         records = sweep(detector, images, spec, target_label, pattern=control_pattern,
                         placement=placement, seed=seed, threshold=threshold,
                         image_ids=image_ids)
@@ -184,30 +231,48 @@ def execute_run(run_id: str) -> dict[str, Any]:
         run.status = "running"
         run.started_at = utcnow()
         experiment.status = "running"
-        session.flush()
+        # Commit, not flush: a flushed-only status is invisible to the client
+        # polling GET /runs/{id}, and on SQLite it holds the write lock for the
+        # whole run. The session keeps its objects (expire_on_commit=False).
+        session.commit()
 
         log: list[str] = []
 
         def note(message: str) -> None:
             log.append(f"{datetime.now(timezone.utc).isoformat()} {message}")
             run.log = list(log)
-            session.flush()
+            session.commit()  # progress is only progress if another session can read it
 
         base = {"run_id": run.id, "experiment_id": experiment.id, "project_id": experiment.project_id}
         try:
             events.emit(events.EXPERIMENT_STARTED, **base, seed=run.seed, detector=experiment.detector_id)
             note(f"loading dataset {dataset.name} v{dataset.version}")
-            images, image_ids = _load_images(session, dataset, image_size)
+            original_sizes: dict[str, tuple[int, int]] = {}
+            images, image_ids = _load_images(session, dataset, image_size, original_sizes)
+            images = images.to(getattr(detector, "device", images.device))
             note(f"{images.shape[0]} image(s) at {image_size}px")
+
+            placements = _placements_for(detector, images, target_label, threshold)
+            fit_idx, eval_idx, held_out = split_indices(images.shape[0], run.seed)
+            split = {
+                "held_out": held_out,
+                "optimize": [image_ids[i] for i in fit_idx],
+                "evaluate": [image_ids[i] for i in eval_idx],
+            }
+            run.configuration = {**config, "split": split}
+            note(f"split: optimize on {len(fit_idx)}, evaluate on {len(eval_idx)} image(s)"
+                 + ("" if held_out else " - NOT held out: a single image cannot be split"))
+            fit_images, fit_placements = images[fit_idx], [placements[i] for i in fit_idx]
+            # From here on `images` is the evaluation side only: every reported
+            # number comes from images the optimizer never saw.
+            images, image_ids = images[eval_idx], split["evaluate"]
+            placement = [placements[i] for i in eval_idx]
 
             events.emit(events.EVALUATION_STARTED, **base, stage="baseline")
             baseline = sweep(detector, images, spec, target_label, seed=run.seed,
                              threshold=threshold, image_ids=image_ids)
             note(f"baseline sweep: {len(baseline)} samples, "
                  f"detection rate {metrics.summarize(baseline)['detection_rate']:.3f}")
-
-            placement = _placement_for(detector, images, target_label, threshold)
-            note(f"placement {placement.as_dict()}")
 
             events.emit(events.PATTERN_GENERATION_STARTED, **base, strategy=(
                 "gradient" if detector.differentiable else "evolution"))
@@ -217,7 +282,7 @@ def execute_run(run_id: str) -> dict[str, Any]:
                     events.emit(events.PATTERN_ITERATION_COMPLETED, **base, **record)
                     note(f"iteration {step}: loss {record['loss']:.4f}")
 
-            result = optimize(detector, images, placement, spec, opt_cfg, on_iteration=on_iteration)
+            result = optimize(detector, fit_images, fit_placements, spec, opt_cfg, on_iteration=on_iteration)
 
             png = to_png(result.pattern)
             uri, digest, size_bytes = put_bytes(run.organization_id, png)
@@ -235,7 +300,11 @@ def execute_run(run_id: str) -> dict[str, Any]:
                 version=version, artifact_id=artifact.id,
                 generation_parameters={
                     **opt_cfg.as_dict(),
-                    "placement": placement.as_dict(),
+                    # `placement` (first evaluated image) is the pre-split spelling,
+                    # kept for stored readers; `placements` is the real record.
+                    "placement": placement[0].as_dict(),
+                    "placements": {i: p.as_dict() for i, p in zip(image_ids, placement)},
+                    "split": split,
                     "transform_spec": spec.as_dict(),
                 },
                 metrics=result.summary(),
@@ -304,6 +373,18 @@ def execute_run(run_id: str) -> dict[str, Any]:
                             detector=transfer_id,
                             candidate_rate=transfer[transfer_id]["candidate"]["detection_rate"])
 
+            # Each transfer detector is its own significance test: correct across
+            # the family, or listing more detectors manufactures a "transfer".
+            tested = [k for k, v in transfer.items()
+                      if (v.get("attribution", {}).get("significance") or {}).get("available")]
+            adjusted = significance.holm(
+                [transfer[k]["attribution"]["significance"]["worst_p_value"] for k in tested])
+            for key, p_value in zip(tested, adjusted):
+                transfer[key]["family"] = {
+                    "detectors_tested": len(tested), "holm_p_value": p_value,
+                    "significant_after_correction": p_value < significance.SIGNIFICANCE_LEVEL,
+                }
+
             # Physical records only mean something once you know what was on
             # the subject. Only 'candidate' records score; 'unspecified' ones
             # (predating the arm column, or recorded without it) are counted
@@ -340,7 +421,7 @@ def execute_run(run_id: str) -> dict[str, Any]:
                 note("physical tests: " + ", ".join(
                     f"{arm}={len(records)}" for arm, records in sorted(by_arm.items())))
 
-            annotations = dataset.annotations or {}
+            annotations = _annotations_at(dataset.annotations or {}, original_sizes, image_size)
             evaluation = Evaluation(
                 organization_id=run.organization_id, experiment_id=experiment.id, run_id=run.id,
                 pattern_id=pattern_row.id,
@@ -363,6 +444,7 @@ def execute_run(run_id: str) -> dict[str, Any]:
                         baseline, candidate, control or None, control_draws_records or None
                     ),
                     "transfer": transfer,
+                    "split": split,
                     "physical": physical_summary,
                     "veil_score": robustness.veil_score(candidate, physical or None),
                     "baseline_veil_score": robustness.veil_score(baseline),
@@ -392,6 +474,10 @@ def execute_run(run_id: str) -> dict[str, Any]:
             return {"run_id": run.id, "status": "completed", "evaluation_id": evaluation.id,
                     "pattern_id": pattern_row.id}
         except Exception as exc:  # noqa: BLE001 - the failure is the result
+            # First: if the failure was a flush error the session refuses every
+            # further commit, note() below would raise, and the run would stay
+            # 'running' (already committed) - blocking its experiment for good.
+            session.rollback()
             run.status = "failed"
             run.error = f"{type(exc).__name__}: {exc}"
             run.finished_at = utcnow()

@@ -17,6 +17,12 @@ from veil.db import scoped
 from veil.ml.detectors import registry
 from veil.models import Dataset, Evaluation, Experiment, ExperimentRun, Pattern, PhysicalTest
 
+NOT_HELD_OUT = (
+    "The pattern was evaluated on the same image(s) it was optimized on: the "
+    "dataset was too small to hold any out. Every rate in this report is a "
+    "training score and says nothing about a new photograph."
+)
+
 LIMITATIONS = [
     "This report describes experimental results obtained under the specified "
     "test conditions. Results may not generalize to other models, cameras, "
@@ -24,9 +30,14 @@ LIMITATIONS = [
     "Digital results are measured on a simulated transformation distribution. "
     "Simulation is an approximation of physical capture, not a substitute for it.",
     "Detection rates are estimated from a finite sample; 95% confidence "
-    "intervals are reported alongside each rate.",
+    "intervals are reported alongside each rate. The intervals treat every "
+    "image-transformation pair as independent and describe the rate on the "
+    "evaluated images only; with few images they say little about new ones.",
     "A pattern optimized against one detector is not expected to transfer to "
-    "detectors it was not measured against.",
+    "detectors it was not measured against. Transfer results are exploratory: "
+    "their p-values are Holm-corrected across the transfer detectors tested; "
+    "the primary detector is the hypothesis stated in advance and is not part "
+    "of that correction.",
     "The baseline-to-candidate drop includes the effect of the patch covering "
     "part of the subject. Only the control-to-candidate difference is "
     "attributable to the pattern itself; where no control arm was run, no such "
@@ -76,9 +87,11 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
     physical = list(session.scalars(
         scoped(PhysicalTest, org).where(PhysicalTest.experiment_id == experiment.id)
     ))
-    detector_info = registry.get(experiment.detector_id, cached=False).metadata().as_dict()
+    detector_info = registry.info(experiment.detector_id).as_dict()
 
     comparison = evaluation.metrics.get("comparison", {})
+    # Evaluations stored before the split existed were not held out either.
+    split = evaluation.metrics.get("split") or {"held_out": False}
     return _jsonable({
         "title": f"VEIL Experiment Report #{experiment.number:03d}",
         "experiment": {
@@ -121,14 +134,15 @@ def build(session: Session, experiment: Experiment, run: ExperimentRun | None = 
             "veil_score": evaluation.metrics.get("veil_score", {}),
             "transfer": evaluation.metrics.get("transfer", {}),
             "ground_truth": evaluation.metrics.get("ground_truth", {}),
+            "split": split,
         },
         "physical_tests": [
             {
-                "id": t.id, "camera": t.camera, "resolution": t.resolution, "fps": t.fps,
+                "id": t.id, "arm": t.arm or "unspecified", "camera": t.camera, "resolution": t.resolution, "fps": t.fps,
                 "distance_m": t.distance_m, "angle_deg": t.angle_deg, "lighting": t.lighting,
                 "environment": t.environment, "frame_count": t.frame_count, "result": t.result,
             }
             for t in physical
         ],
-        "limitations": LIMITATIONS,
+        "limitations": LIMITATIONS if split.get("held_out") else [NOT_HELD_OUT, *LIMITATIONS],
     })

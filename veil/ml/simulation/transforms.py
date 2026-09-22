@@ -16,8 +16,8 @@ the image is resampled once instead of five times.
 from __future__ import annotations
 
 import hashlib
-import itertools
 import math
+import random
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -89,12 +89,23 @@ class TransformSpec:
             list(self.perspective), list(self.brightness), list(self.contrast),
             list(self.blur_sigma), list(self.noise_std), list(self.deformation),
         ]
+        # A fixed-seed subsample, not the first N: product() varies the last
+        # axis fastest, so truncating it drops whole values of the first axis
+        # (the default grid lost rotation=+30 entirely). A stride would alias
+        # with the axis lengths instead. Indices are drawn from the size and
+        # decoded one by one: the product itself is never built, since axis
+        # lengths come from user configuration.
+        total = math.prod(len(axis) for axis in axes)
+        picks = range(total) if total <= self.max_samples else sorted(
+            random.Random(0).sample(range(total), self.max_samples))
         out = []
-        for combo in itertools.product(*axes):
-            rot, sc, tr, persp, bri, con, blur, noise, deform = combo
+        for index in picks:
+            combo = []
+            for axis in reversed(axes):  # last axis fastest, like itertools.product
+                index, position = divmod(index, len(axis))
+                combo.append(axis[position])
+            deform, noise, blur, con, bri, persp, tr, sc, rot = combo
             out.append(TransformParams(rot, sc, tr, tr, persp, bri, con, blur, noise, deform))
-            if len(out) >= self.max_samples:
-                break
         return out
 
     def _random(self, seed: int) -> list[TransformParams]:
@@ -194,4 +205,8 @@ def apply(image: torch.Tensor, params: TransformParams, seed: int = 0) -> torch.
         gen = torch.Generator(device="cpu").manual_seed(params.seed(seed))
         noise = torch.randn(out.shape, generator=gen).to(device=out.device, dtype=out.dtype)
         out = out + noise * params.noise_std
-    return out.clamp(0.0, 1.0)
+    # Same values as a hard clamp, but the gradient passes straight through. A
+    # hard clamp gives saturated pixels a gradient of exactly zero, and at
+    # brightness 1.4 most of a bright pattern saturates: those pixels would stay
+    # frozen at whatever colour they started with.
+    return out + (out.clamp(0.0, 1.0) - out).detach()

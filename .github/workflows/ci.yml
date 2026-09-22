@@ -14,7 +14,9 @@ jobs:
       - name: Install (CPU torch)
         run: |
           pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
-          pip install -e ".[dev]"
+          pip install -e ".[dev]" ruff
+      - name: Lint
+        run: ruff check .
       # Cached so the slow suite does not re-download weights on every run.
       - uses: actions/cache@v4
         with:
@@ -22,8 +24,8 @@ jobs:
           key: torch-hub-${{ hashFiles('veil/ml/detectors/torchvision_detector.py') }}
       - name: Fast suite (no model weights)
         run: pytest -q -m "not slow"
-      - name: Full suite
-        run: pytest -q
+      - name: Slow suite (model weights)
+        run: pytest -q -m slow
 
   web:
     runs-on: ubuntu-latest

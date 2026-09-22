@@ -28,7 +28,7 @@ def evaluate_production(
     images: torch.Tensor,
     image_ids: list[str],
     pattern: torch.Tensor,
-    placement: Placement,
+    placement: Placement | list[Placement],
     spec: TransformSpec,
     production: ProductionSpec,
     *,
@@ -42,8 +42,10 @@ def evaluate_production(
     artwork = to_artwork(pattern, production)
     # Back to the optimizer's working resolution so the renderer composites it
     # the same way it did during the run - the production grid is far larger.
+    # Nearest, not area: averaging neighbouring stitches invents colours no yarn
+    # has, and the point of this sweep is to measure what the mill can make.
     resized = torch.nn.functional.interpolate(
-        artwork.unsqueeze(0), size=pattern.shape[-2:], mode="area"
+        artwork.unsqueeze(0), size=pattern.shape[-2:], mode="nearest"
     ).squeeze(0)
 
     records = sweep(detector, images, spec, target_label, pattern=resized,

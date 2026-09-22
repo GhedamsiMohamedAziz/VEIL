@@ -23,7 +23,7 @@ def sweep(
     spec: T.TransformSpec,
     target_label: str,
     pattern: torch.Tensor | None = None,
-    placement: Placement | None = None,
+    placement: Placement | list[Placement] | None = None,
     seed: int = 0,
     threshold: float = 0.5,
     image_ids: list[str] | None = None,
@@ -34,7 +34,10 @@ def sweep(
         scene = render_scene(images, pattern, placement, params, seed=seed)
         batches = detector.predict(scene, threshold=threshold)
         for i, dets in enumerate(batches):
-            hits = [d for d in dets if d.label == target_label]
+            # Highest confidence first: ground-truth matching is greedy, and a weak
+            # box must not claim the annotation a strong one would have matched.
+            hits = sorted((d for d in dets if d.label == target_label),
+                          key=lambda d: d.score, reverse=True)
             records.append(
                 {
                     "image_index": i,

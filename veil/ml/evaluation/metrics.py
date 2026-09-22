@@ -43,13 +43,20 @@ def summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     records = list(records)
     n = len(records)
     if n == 0:
-        return {"samples": 0, "detection_rate": None, "mean_confidence": None}
+        return {"samples": 0, "images": None, "detection_rate": None, "mean_confidence": None}
     detected = sum(1 for r in records if r["detected"])
     scores = [r["max_score"] for r in records]
     positive = [s for s in scores if s > 0]
     lo, hi = _wilson_interval(detected, n)
     return {
         "samples": n,
+        # The interval below counts every image x transformation as independent.
+        # They are not: 1 image x 256 points is one subject seen 256 ways. It
+        # bounds the rate *on these images*; how far that carries to new ones
+        # is limited by `images`, which therefore travels with it.
+        # piggy: no between-image interval - with the 1-4 images runs have
+        # today a cluster bootstrap is degenerate. Add one when datasets reach ~10.
+        "images": len({r.get("image_id") for r in records if r.get("image_id") is not None}) or None,
         "detections": detected,
         "detection_rate": detected / n,
         "detection_rate_ci95": [lo, hi],
@@ -58,6 +65,15 @@ def summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "max_confidence": max(scores),
         "total_detections": sum(r["detection_count"] for r in records),
     }
+
+
+def _keeps_geometry(transform: dict[str, Any]) -> bool:
+    """True when the transformation left every pixel where the annotation says
+    it is. Brightness, blur and noise do; rotation, scale, shift, tilt and
+    cloth deformation move the subject away from its labelled box."""
+    return (transform.get("scale", 1.0) == 1.0 and not any(
+        transform.get(k) for k in ("rotation_deg", "translate_x", "translate_y",
+                                   "perspective", "deformation")))
 
 
 def ground_truth_metrics(
@@ -70,11 +86,18 @@ def ground_truth_metrics(
 
     Only records whose image has annotations contribute; if the dataset is
     unlabelled the caller gets `{"available": False}` rather than a fake 0.0.
+    Geometrically transformed records are skipped: their boxes live in the
+    warped frame, and matching them to unwarped annotations measures the warp.
+    `annotations` must already be in the records' pixel frame (see
+    `runner._annotations_at`).
     """
     tp = fp = fn = 0
     ious: list[float] = []
-    used = 0
+    used = warped = 0
     for record in records:
+        if not _keeps_geometry(record.get("transform") or {}):
+            warped += 1
+            continue
         gt_boxes = [
             a["box"] for a in annotations.get(record.get("image_id") or "", [])
             if a.get("label") == target_label
@@ -97,7 +120,10 @@ def ground_truth_metrics(
                 fp += 1
         fn += len(remaining)
     if used == 0:
-        return {"available": False, "reason": "no ground-truth annotations for this label"}
+        return {"available": False, "reason": (
+            "every sweep point moves the subject out of its labelled frame; add an "
+            "unrotated, unscaled point to the transform grid to score ground truth"
+            if warped else "no ground-truth annotations for this label")}
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0

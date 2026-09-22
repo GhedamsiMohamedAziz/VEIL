@@ -23,6 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
+import atexit
+import re
 import time
 
 import numpy as np
@@ -73,12 +75,17 @@ def main() -> int:
 
     folder = args.folder.expanduser()
     folder.mkdir(parents=True, exist_ok=True)
-    existing = len(list(folder.glob("subject-*.jpg")))
-    print(f"saving to {folder}  ({existing} already there)")
+    # Highest index, not a count: deleting early photos must never make new ones overwrite later ones.
+    existing = max((int(m.group(1)) for p in folder.glob("subject-*.jpg")
+                    if (m := re.fullmatch(r"subject-(\d+)", p.stem))), default=0)
+    print(f"saving to {folder}  (numbering continues after {existing})")
     print("loading detector…")
     detector = registry.get(args.detector)
 
     capture = cv2.VideoCapture(args.camera_index)
+    # Released on every way out (exception, sys.exit, q), not only the last line.
+    atexit.register(cv2.destroyAllWindows)
+    atexit.register(capture.release)
     if not capture.isOpened():
         hint = ("\nmacOS: System Settings > Privacy & Security > Camera, enable "
                 "your terminal, then restart it." if sys.platform == "darwin" else "")

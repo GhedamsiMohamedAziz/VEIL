@@ -53,9 +53,7 @@ def test_registry_lists_and_resolves():
 def test_evaluate_summarizes_a_batch():
     batch = torch.cat([red(), torch.full((1, 3, 64, 64), 0.5)])
     summary = ColorBlobDetector().evaluate(batch, LABEL)
-    assert summary == {
-        "images": 2, "detected": 1,
-        "max_scores": [summary["max_scores"][0], 0.0],
-        "detections": summary["detections"],
-    }
-    assert summary["max_scores"][0] > 0.5
+    # Compared to literals: a dict rebuilt from `summary`'s own fields equals itself.
+    assert summary["images"] == 2 and summary["detected"] == 1
+    assert summary["max_scores"][0] > 0.5 and summary["max_scores"][1] == 0.0
+    assert [len(d) for d in summary["detections"]] == [1, 0]

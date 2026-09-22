@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { AttributionBar, ComparisonBars, ScoreMeter, type Row } from "@/components/chart";
 import { PatternImage } from "@/components/pattern-image";
 import { Card, Loading, PageHeader, Shell, Stat, Status, Table, useApi } from "@/components/ui";
@@ -19,6 +19,11 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
   const physical = useApi<PhysicalTest[]>(`/physical-tests?experiment_id=${id}`);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };  // stops run() polling once the page is left
+  }, []);
 
   const evaluation = results.data?.[0];
   const score = evaluation?.metrics?.veil_score ?? {};
@@ -33,11 +38,26 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
     setBusy(true);
     setProblem(null);
     try {
-      await api(`/experiments/${id}/run`, { method: "POST", body: JSON.stringify({ seed: 42 }) });
-      setTimeout(() => location.reload(), 800);
+      const started = await api<Run>(`/experiments/${id}/run`, { method: "POST", body: JSON.stringify({ seed: 42 }) });
+      runs.reload();
+      // A run takes minutes: follow it until it ends instead of guessing a delay.
+      let current = started;
+      const deadline = Date.now() + 60 * 60 * 1000;
+      while (current.status === "queued" || current.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (!mounted.current) return;
+        if (Date.now() > deadline) {
+          setProblem("still running after an hour; reload this page to check on it");
+          break;
+        }
+        current = await api<Run>(`/runs/${started.id}`);
+      }
+      if (current.status === "failed") setProblem(current.error || "run failed");
+      for (const hook of [experiment, runs, results, patterns]) hook.reload();
     } catch (e) {
       setProblem((e as Error).message);
-      setBusy(false);
+    } finally {
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -153,7 +173,7 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
               {Object.keys(transfer).length > 0 && (
                 <Card title="Transfer to detectors not optimized against">
                   <Table
-                    head={["Detector", "Baseline", "Control", "Candidate", "Verdict"]}
+                    head={["Detector", "Baseline", "Control", "Candidate", "Verdict", "p across detectors (Holm)"]}
                     empty="No transfer detectors configured."
                     rows={Object.entries(transfer).map(([id, block]) => [
                       <span key="d">{id}</span>,
@@ -167,6 +187,13 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
                         {block?.available
                           ? (block?.attribution?.verdict ?? block?.attribution?.reason)
                           : `not measured — ${block?.reason}`}
+                      </span>,
+                      // Each detector is one more chance of a spurious "significant":
+                      // this is the p-value corrected for how many were tested.
+                      <span key="h" className="tabular-nums">
+                        {block?.family
+                          ? `${num(block.family.holm_p_value, 3)} — ${block.family.significant_after_correction ? "significant" : "not significant"}`
+                          : "—"}
                       </span>,
                     ])}
                   />
@@ -245,9 +272,10 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
 
           <Card title="Physical tests">
             <Table
-              head={["Camera", "Distance", "Angle", "Lighting", "Frames", "Detected"]}
+              head={["Arm", "Camera", "Distance", "Angle", "Lighting", "Frames", "Detected"]}
               empty="No physical tests recorded. Physical robustness stays 'not measured' until one is."
               rows={(physical.data ?? []).map((t) => [
+                <strong key="arm">{t.arm || "unspecified"}</strong>,
                 t.camera,
                 <span key="d" className="tabular-nums">{t.distance_m ?? "—"} m</span>,
                 <span key="a" className="tabular-nums">{t.angle_deg ?? "—"}°</span>,

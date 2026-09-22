@@ -16,7 +16,8 @@ LABEL = "blob"
 
 
 class ColorBlobDetector(Detector):
-    """Detects saturated regions of a target hue via connected columns/rows.
+    """Detects a saturated region of a target hue: one bounding box around every
+    matching pixel (no connected components - two separate blobs give one box).
 
     A region counts as a detection when enough pixels are both bright and
     dominated by the target channel. Score is the fraction of such pixels in

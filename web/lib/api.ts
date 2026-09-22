@@ -79,8 +79,9 @@ export type Detector = {
   differentiable: boolean; license: string; source: string; notes: string;
 };
 export type PhysicalTest = {
-  id: string; experiment_id: string; pattern_id: string | null; camera: string;
-  resolution: string; distance_m: number | null; angle_deg: number | null;
+  id: string; experiment_id: string; pattern_id: string | null;
+  arm: string; // baseline | control | candidate | unspecified - what was on the subject
+  camera: string; resolution: string; distance_m: number | null; angle_deg: number | null;
   lighting: string; environment: string; frame_count: number;
   result: Record<string, any>; created_at: string;
 };

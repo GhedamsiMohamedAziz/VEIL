@@ -14,14 +14,23 @@ export function PatternImage({ patternId, className }: { patternId: string; clas
 
   useEffect(() => {
     let objectUrl: string | null = null;
+    let cancelled = false;
+    // The router reuses this component across /patterns/[id]: start clean, or
+    // one missing image leaves every later pattern "unavailable".
+    setUrl(null);
+    setFailed(false);
     fetch(`${apiBase}/patterns/${patternId}/image`, { headers: { "X-API-Key": getApiKey() } })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
       .then((blob) => {
+        if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
         setUrl(objectUrl);
       })
-      .catch(() => setFailed(true));
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [patternId]);
 
   if (failed) return <p className="text-xs" style={{ color: "var(--ink-muted)" }}>image unavailable</p>;

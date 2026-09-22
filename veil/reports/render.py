@@ -45,6 +45,7 @@ class _Writer:
         chunks = [text[i : i + width] for i in range(0, len(text), width)] or [""]
         for chunk in chunks:
             self._space(gap)
+            self.pdf.setFont(font, size)  # showPage() in _space resets the font
             self.pdf.drawString(_LEFT, self.y, chunk)
             self.y -= gap
 
@@ -90,6 +91,9 @@ def to_pdf(report: dict[str, Any]) -> bytes:
     w.heading("Results")
     w.kv("samples per condition set", results["sample_count"])
     baseline, candidate = results["baseline"], results["candidate"]
+    split = results.get("split") or {}
+    w.kv("images evaluated", f"{candidate.get('images') or 'not recorded'}"
+         + (" (held out from optimization)" if split.get("held_out") else " (NOT held out)"))
     control = results.get("control")
     spread = (control or {}).get("spread") or {}
     w.kv("baseline detection rate", _pct(baseline.get("detection_rate")))
@@ -102,7 +106,7 @@ def to_pdf(report: dict[str, Any]) -> bytes:
         w.kv(label, _pct(control.get("detection_rate")))
         if spread.get("draws", 0) > 1:
             w.kv("control draws (best to worst)",
-                 ", ".join(_pct(r) for r in sorted(spread["rates"])))
+                 ", ".join(_pct(r) for r in sorted(spread.get("rates", []))))
     w.kv("candidate detection rate", _pct(candidate.get("detection_rate")))
     w.kv("delta vs baseline", _pct(results["delta"].get("detection_rate")))
     if control:
@@ -164,12 +168,19 @@ def to_pdf(report: dict[str, Any]) -> bytes:
             verdict = block.get("attribution", {}).get("verdict") \
                 or block.get("attribution", {}).get("reason", "no attribution")
             w.line(f"  verdict: {verdict}", size=8)
+            family = block.get("family")
+            if family and family["detectors_tested"] > 1:
+                w.line(f"  across the {family['detectors_tested']} transfer detectors tested (Holm): "
+                       f"p = {family['holm_p_value']:.3f}, "
+                       + ("still significant" if family["significant_after_correction"]
+                          else "NOT significant once corrected"), size=8)
 
     w.heading("Physical tests")
     if report["physical_tests"]:
         for test in report["physical_tests"]:
+            # The arm first: a rate means nothing until you know what was worn.
             w.line(
-                f"{test['camera']} @ {test['resolution']}, {test['distance_m']}m, "
+                f"[{test.get('arm', 'unspecified')}] {test['camera']} @ {test['resolution']}, {test['distance_m']}m, "
                 f"{test['angle_deg']} deg, {test['lighting']}, {test['environment']}: "
                 f"{test['result']}"
             )

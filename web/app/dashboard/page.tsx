@@ -11,7 +11,9 @@ export default function Dashboard() {
   const physical = useApi<PhysicalTest[]>("/physical-tests");
   const detectors = useApi<Detector[]>("/detectors");
 
-  const error = projects.error ?? experiments.error;
+  const error = projects.error ?? experiments.error ?? physical.error ?? detectors.error;
+  // "not loaded" is never rendered as 0 (see lib/format.ts).
+  const count = (items: unknown[] | null) => (items ? String(items.length) : "—");
   const completed = (experiments.data ?? []).filter((e) => e.status === "completed").length;
 
   return (
@@ -22,10 +24,10 @@ export default function Dashboard() {
       {!error && (
         <>
           <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="Projects" value={String(projects.data?.length ?? 0)} />
-            <Stat label="Experiments" value={String(experiments.data?.length ?? 0)} note={`${completed} completed`} />
-            <Stat label="Physical tests" value={String(physical.data?.length ?? 0)} note="real camera measurements" />
-            <Stat label="Detectors" value={String(detectors.data?.length ?? 0)} note="registered in code" />
+            <Stat label="Projects" value={count(projects.data)} />
+            <Stat label="Experiments" value={count(experiments.data)} note={`${completed} completed`} />
+            <Stat label="Physical tests" value={count(physical.data)} note="real camera measurements" />
+            <Stat label="Detectors" value={count(detectors.data)} note="registered in code" />
           </div>
 
           <Card title="Recent experiments">

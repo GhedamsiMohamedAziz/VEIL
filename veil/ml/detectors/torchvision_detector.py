@@ -7,6 +7,8 @@ loads a user-supplied checkpoint (see docs/security.md).
 
 from __future__ import annotations
 
+import threading
+
 import torch
 
 from veil.ml.detectors.base import Detection, Detector, DetectorInfo
@@ -65,7 +67,10 @@ class TorchvisionDetector(Detector):
         self.model_id = model_id
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._model = None
-        self._weights_name = ""
+        # Last forward's pre-selection scores. Thread-local: the registry hands
+        # this one instance to the run worker and to request threads alike, and
+        # a forward in one must not replace what `score` is about to read in another.
+        self._raw = threading.local()
 
     def load(self) -> "TorchvisionDetector":
         if self._model is not None:
@@ -74,16 +79,38 @@ class TorchvisionDetector(Detector):
 
         fn_name, weights_enum, _ = _MODELS[self.model_id]
         weights = getattr(torchvision.models.detection, weights_enum).DEFAULT
-        self._weights_name = str(weights)
         model = getattr(torchvision.models.detection, fn_name)(weights=weights)
         self._model = model.eval().to(self.device)
         for p in self._model.parameters():
             p.requires_grad_(False)  # we optimize the pattern, never the model
+        # Class scores before thresholding/NMS, for `score`'s fallback.
+        if hasattr(model, "roi_heads"):  # Faster R-CNN: proposals are concatenated across images
+            model.rpn.register_forward_hook(
+                lambda _m, _i, out: setattr(self._raw, "counts", [len(p) for p in out[0]]))
+            model.rpn.head.register_forward_hook(  # per-level [batch, anchors, h, w] logits
+                lambda _m, _i, out: setattr(self._raw, "objectness", out[0]))
+            model.roi_heads.box_predictor.register_forward_hook(
+                lambda _m, _i, out: setattr(self._raw, "probs", out[0].softmax(-1)))
+        else:  # RetinaNet: [batch, anchors, classes] logits
+            model.head.classification_head.register_forward_hook(
+                lambda _m, _i, out: self._raw.__dict__.update(probs=out.sigmoid(), counts=None))
         return self
+
+    def _raw_confidence(self, index: int, wanted: int) -> torch.Tensor:
+        """Highest pre-selection confidence for class `wanted` in image `index`."""
+        probs, counts = self._raw.probs, self._raw.counts
+        per_image = probs.split(counts)[index] if counts else probs[index]
+        if per_image.shape[0] == 0:
+            # The RPN proposed nothing at all for this image: one level further
+            # back, the class-agnostic objectness is all that is left.
+            return torch.stack([level[index].sigmoid().max()
+                                for level in self._raw.objectness]).max()
+        return per_image[:, wanted].max()
 
     def _forward(self, images: torch.Tensor) -> list[dict[str, torch.Tensor]]:
         self.load()
         assert self._model is not None
+        self._raw.__dict__.clear()  # or the previous forward's graph stays pinned between runs
         return self._model([img for img in images.to(self.device)])
 
     @torch.no_grad()
@@ -111,20 +138,26 @@ class TorchvisionDetector(Detector):
         for i, result in enumerate(self._forward(images)):
             match = result["scores"][result["labels"] == wanted]
             if match.numel() == 0:
-                # Keep the graph connected so .backward() still works.
-                scores.append(images[i].sum() * 0.0)
+                # Nothing survived selection. A constant 0 here has an exactly
+                # zero gradient: the moment the pattern works, only the
+                # printability penalties pull on it and they undo the attack.
+                # Fall back to the best pre-selection confidence instead.
+                scores.append(self._raw_confidence(i, wanted))
             else:
                 scores.append(match.max())
         return torch.stack(scores)
 
     def metadata(self) -> DetectorInfo:
-        _, _, notes = _MODELS[self.model_id]
+        _, weights_enum, notes = _MODELS[self.model_id]
         import torchvision
 
+        # Resolved from the enum, not from load(): the catalogue, the report and
+        # the run must all name the same weights, loaded or not.
+        weights_name = str(getattr(torchvision.models.detection, weights_enum).DEFAULT)
         return DetectorInfo(
             id=self.model_id,
             name=_MODELS[self.model_id][0],
-            version=f"torchvision-{torchvision.__version__}:{self._weights_name or 'DEFAULT'}",
+            version=f"torchvision-{torchvision.__version__}:{weights_name}",
             labels=[l for l in COCO_LABELS if l not in ("N/A", "__background__")],
             differentiable=True,
             license="BSD-3-Clause (torchvision), COCO weights",

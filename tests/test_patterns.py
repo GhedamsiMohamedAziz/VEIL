@@ -48,3 +48,84 @@ def test_quantization_snaps_every_pixel_to_the_ink_set():
     pixels = {tuple(round(float(v), 4) for v in quantized[:, y, x])
               for y in range(16) for x in range(16)}
     assert pixels <= palette
+
+
+def test_an_optimizer_that_cannot_improve_reports_no_improvement():
+    """A detector blind to the pattern: its score follows the brightness draw
+    only. Accepting on a lucky draw, or reporting the minimum of noisy step
+    losses, would both claim progress here. Nothing may be claimed."""
+    from veil.ml.patterns.optimizer import OptimizationConfig, optimize
+    from veil.ml.simulation.renderer import Placement
+    from veil.ml.simulation.transforms import TransformSpec
+
+    class CornerBrightness:
+        differentiable = False
+
+        def evaluate(self, scene, label):
+            return {"max_scores": [float(scene[..., :4, :4].mean())]}
+
+    spec = TransformSpec(rotation_deg=[0.0], scale=[1.0], translate=[0.0], perspective=[0.0],
+                         brightness=[0.5, 1.5], contrast=[1.0], blur_sigma=[0.0],
+                         noise_std=[0.0], deformation=[0.0])
+    cfg = OptimizationConfig(target_label="x", pattern_size=16, iterations=8,
+                             batch_transforms=1, tv_weight=0.0, nps_weight=0.0, seed=5)
+    result = optimize(CornerBrightness(), torch.full((1, 3, 64, 64), 0.5),
+                      Placement(0.5, 0.5, 0.2, 0.2), spec, cfg)
+    start = constraints.quantize_to_palette(generator.initialize(16, cfg.init_method, cfg.seed))
+    assert torch.equal(result.pattern, start)
+    assert result.summary()["improvement"] == 0.0
+    assert len({round(h["loss"], 6) for h in result.history}) > 1  # the draws did vary
+
+
+def test_gradient_strategy_exports_a_pattern_that_really_lowers_the_loss():
+    """A differentiable stand-in whose confidence is the scene's mean
+    brightness: the optimizer must darken the patch, export it quantized, and
+    report an improvement."""
+    from veil.ml.patterns.optimizer import OptimizationConfig, optimize
+    from veil.ml.simulation.renderer import Placement
+    from veil.ml.simulation.transforms import TransformSpec
+
+    class Brightness:
+        differentiable = True
+
+        def score(self, scene, label):
+            return scene.mean(dim=(1, 2, 3))
+
+    spec = TransformSpec(rotation_deg=[-10.0, 10.0], scale=[1.0], translate=[0.0],
+                         perspective=[0.0], brightness=[0.8, 1.2], contrast=[1.0],
+                         blur_sigma=[0.0], noise_std=[0.0], deformation=[0.0])
+    cfg = OptimizationConfig(target_label="x", pattern_size=16, iterations=25, batch_transforms=2,
+                             learning_rate=0.1, tv_weight=0.0, nps_weight=0.0, seed=1)
+    result = optimize(Brightness(), torch.full((2, 3, 64, 64), 0.5),
+                      Placement(0.5, 0.5, 0.4, 0.4), spec, cfg)
+    start = constraints.quantize_to_palette(generator.initialize(16, cfg.init_method, cfg.seed))
+    assert result.strategy == "gradient" and len(result.history) == 25
+    assert float(result.pattern.mean()) < float(start.mean())
+    assert result.summary()["improvement"] > 0
+    assert float(constraints.non_printability(result.pattern)) < 1e-5
+
+
+def test_production_sweep_measures_only_colours_the_mill_can_make(monkeypatch):
+    from veil.ml import manufacture_eval
+    from veil.ml.patterns.manufacture import ProductionSpec, to_artwork
+    from veil.ml.simulation.renderer import Placement
+    from veil.ml.simulation.transforms import TransformSpec
+
+    swept = {}
+
+    def fake_sweep(detector, images, spec, label, pattern=None, **kwargs):
+        swept["pattern"] = pattern
+        return [{"detected": False, "max_score": 0.0, "detection_count": 0, "boxes": [],
+                 "transform": {}, "image_id": "a", "image_index": 0, "transform_index": 0}]
+
+    monkeypatch.setattr(manufacture_eval, "sweep", fake_sweep)
+    pattern = generator.initialize(48, "uniform_noise", seed=2)
+    production = ProductionSpec(method="knit", stitches_per_cm=4, width_cm=10, height_cm=12, max_yarns=4)
+    manufacture_eval.evaluate_production(
+        None, torch.zeros(1, 3, 64, 64), ["a"], pattern, Placement(0.5, 0.5, 0.3, 0.3),
+        TransformSpec(), production, target_label="x", threshold=0.5, seed=1)
+
+    def colours(t):
+        return {tuple(round(float(v), 4) for v in px) for px in t.reshape(3, -1).t()}
+
+    assert colours(swept["pattern"]) <= colours(to_artwork(pattern, production))

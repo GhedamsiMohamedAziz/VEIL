@@ -129,3 +129,24 @@ def test_uniformly_marginal_images_are_not_told_to_drop_a_nonexistent_rest(clien
     assert result["dataset_usable"] is False
     assert "marginal" in result["verdict"]
     assert "Drop the other" not in result["verdict"]
+
+
+def test_torso_box_marks_the_figure_that_was_actually_drawn():
+    """The annotation must follow the drawing's RNG stream: it once boxed a
+    figure that was never drawn (IoU down to 0.0007 on some seeds)."""
+    import random
+
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+
+    from veil.ml import scenes
+    from veil.ml.evaluation.metrics import iou
+
+    for seed in range(12):
+        figure = np.asarray(scenes.person(240, seed)).astype(int)
+        empty = Image.new("RGB", (240, 240))
+        scenes._background(ImageDraw.Draw(empty), 240, random.Random(seed))
+        empty = np.asarray(empty.filter(ImageFilter.GaussianBlur(radius=0.6))).astype(int)
+        ys, xs = np.nonzero(np.abs(figure - empty).sum(-1) > 30)
+        drawn = [xs.min(), ys.min(), xs.max() + 1, ys.max() + 1]
+        assert iou(list(scenes.torso_box(240, seed)), drawn) > 0.75, seed

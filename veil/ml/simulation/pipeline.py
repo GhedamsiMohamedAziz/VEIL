@@ -21,7 +21,7 @@ def transformed_views(
 def render_scene(
     images: torch.Tensor,
     pattern: torch.Tensor | None,
-    placement: Placement | None,
+    placement: Placement | list[Placement] | None,
     params: T.TransformParams,
     seed: int = 0,
 ) -> torch.Tensor:
